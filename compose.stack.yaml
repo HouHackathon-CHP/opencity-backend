@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Use with: docker compose -f ../dxos-core/compose.yaml -f compose.stack.yaml up --build -d
+services:
+  gateway:
+    environment:
+      EXTRA_UPSTREAMS: '{"opencity":"http://opencity-api:8000"}'
+    depends_on:
+      - opencity-api
+
+  opencity-api:
+    build: ../opencity-api
+    environment:
+      DATA_URL: http://data:8000
+      WORKFLOW_URL: http://workflow:8000
+      INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:?Create .env from dxos-core/.env.example}
+    depends_on:
+      - data
+      - workflow

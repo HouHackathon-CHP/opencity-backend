@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Exercise the OpenCity API via the running DX-OS gateway and local demo users."""
+
+import base64
+import json
+from pathlib import Path
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from uuid import uuid4
+
+
+ROOT = Path(__file__).resolve().parents[2]
+GATEWAY = "http://localhost:8000"
+IDENTITY = "http://localhost:8081"
+
+
+def env_values():
+    result = {}
+    for line in (ROOT / "dxos-core" / ".env").read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            key, value = line.split("=", 1)
+            result[key] = value
+    return result
+
+
+def send(method, url, *, token=None, body=None, content_type=None):
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if content_type:
+        headers["Content-Type"] = content_type
+    request = Request(url, data=body, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=30) as response:
+            content = response.read()
+            return response.status, json.loads(content) if "json" in response.headers.get("Content-Type", "") else content
+    except HTTPError as error:
+        content = error.read()
+        return error.code, json.loads(content) if "json" in error.headers.get("Content-Type", "") else content
+
+
+def token(username, password):
+    form = urlencode({"grant_type": "password", "client_id": "dxos-cli", "username": username, "password": password}).encode()
+    status, result = send("POST", f"{IDENTITY}/realms/dxos/protocol/openid-connect/token", body=form, content_type="application/x-www-form-urlencoded")
+    assert status == 200, f"Token request returned {status}"
+    return result["access_token"]
+
+
+def multipart(fields, photo):
+    boundary = f"----opencity-{uuid4().hex}"
+    parts = []
+    for key, value in fields.items():
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode())
+    parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"sample.png\"\r\nContent-Type: image/png\r\n\r\n".encode() + photo + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def require(actual, expected, result):
+    assert actual == expected, f"Expected HTTP {expected}, got {actual}: {result}"
+    return result
+
+
+def main():
+    values = env_values()
+    citizen = token("dxos-citizen", values["DEMO_CITIZEN_PASSWORD"])
+    operator = token("dxos-operator", values["DEMO_OPERATOR_PASSWORD"])
+    outsider = token("dxos-outsider", values["DEMO_OUTSIDER_PASSWORD"])
+    status, result = send("GET", f"{GATEWAY}/api/opencity/reports")
+    require(status, 401, result)  # no token
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9xVzgAAAAASUVORK5CYII=")
+    body, content_type = multipart({
+        "title": "Đèn đường hỏng ở ngõ thử nghiệm",
+        "description": "Đèn không sáng trong nhiều buổi tối, cần kiểm tra và sửa chữa.",
+        "category": "Chiếu sáng", "address": "Ngõ thử nghiệm số 1",
+        "latitude": "21.0285", "longitude": "105.8542",
+    }, png)
+    status, created = send("POST", f"{GATEWAY}/api/opencity/reports", token=citizen, body=body, content_type=content_type)
+    require(status, 201, created)
+    assert created["state"] == "submitted" and len(created["attachment_ids"]) == 1 and not created["warnings"]
+    report_id = created["id"]
+    status, detail = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=citizen)
+    require(status, 200, detail)
+    assert detail["history"][0]["action"] == "start"
+    status, photo_content = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}/attachments/{created['attachment_ids'][0]}", token=citizen)
+    require(status, 200, photo_content)
+    assert photo_content == png
+    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/triage", token=citizen)
+    require(status, 403, result)
+    status, result = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=outsider)
+    require(status, 404, result)
+    status, other_list = send("GET", f"{GATEWAY}/api/opencity/reports", token=outsider)
+    require(status, 200, other_list)
+    assert report_id not in {item["id"] for item in other_list}
+    for action, expected_state in [("triage", "triaged"), ("assign", "assigned"), ("resolve", "resolved")]:
+        status, changed = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/{action}", token=operator)
+        require(status, 200, changed)
+        assert changed["state"] == expected_state
+    status, finished = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=citizen)
+    require(status, 200, finished)
+    assert finished["state"] == "resolved" and len(finished["history"]) == 4
+    print("OpenCity smoke passed: authenticated reporting, image, tenant isolation, role checks and workflow.")
+
+
+if __name__ == "__main__":
+    main()
