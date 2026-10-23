@@ -3,12 +3,12 @@
 services:
   gateway:
     environment:
-      EXTRA_UPSTREAMS: '{"opencity":"http://opencity-api:8000"}'
+      EXTRA_UPSTREAMS: '{"opencity":"http://opencity-backend:8000"}'
     depends_on:
-      - opencity-api
+      - opencity-backend
 
-  opencity-api:
-    build: ../opencity-api
+  opencity-backend:
+    build: ../opencity-backend
     environment:
       DATA_URL: http://data:8000
       WORKFLOW_URL: http://workflow:8000

@@ -118,7 +118,7 @@ async def find_instance(report_id: str, identity: Caller) -> dict | None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "opencity-api"}
+    return {"status": "ok", "service": "opencity-backend"}
 
 
 @app.get("/reports")

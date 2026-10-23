@@ -1,6 +1,6 @@
-# OpenCity API — domain backend
+# OpenCity Backend — domain API
 
-Business API for the [OpenCity portal](https://github.com/HouHackathon-CHP/dxos-portal), deployed **behind** the [DX-OS Core](https://github.com/HouHackathon-CHP/dxos-core) gateway. The portal is the frontend; this repository is its separate backend. The core remains headless and reusable.
+Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/opencity-frontend), deployed **behind** the [DX-OS Core](https://github.com/HouHackathon-CHP/dxos-core) gateway. The frontend and backend live in separate repositories. The core remains headless and reusable.
 
 ## Responsibilities
 
@@ -11,7 +11,7 @@ Business API for the [OpenCity portal](https://github.com/HouHackathon-CHP/dxos-
 
 ## Local stack
 
-Keep `dxos-core`, `dxos-portal` and `opencity-api` as sibling directories. From this directory:
+Keep `dxos-core`, `opencity-frontend` and `opencity-backend` as sibling directories. From this directory:
 
 ```powershell
 docker compose --env-file ..\dxos-core\.env -f ..\dxos-core\compose.yaml -f compose.stack.yaml up --build -d
@@ -19,7 +19,7 @@ python ..\dxos-core\scripts\smoke.py
 python scripts\smoke_app.py
 ```
 
-The first command adds an internal `opencity-api` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail.
+The first command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail.
 
 ### Routes
 
