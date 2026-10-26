@@ -9,10 +9,31 @@ from app import main  # noqa: E402
 
 client = TestClient(main.app)
 CITIZEN = {"X-Internal-Secret": "test-secret", "X-DXOS-User": "citizen-1", "X-DXOS-Tenant": "tenant-1", "X-DXOS-Roles": "citizen"}
+OPERATOR = {**CITIZEN, "X-DXOS-User": "operator-1", "X-DXOS-Roles": "operator"}
+OUTSIDER = {**CITIZEN, "X-DXOS-Tenant": "tenant-2"}
 
 
 def test_direct_request_is_rejected():
     assert client.get("/reports").status_code == 403
+    assert client.get("/bulletins").status_code == 403
+
+
+def test_bulletins_are_operator_published_and_tenant_scoped(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "NEWS_DB_PATH", str(tmp_path / "bulletins.sqlite3"))
+    body = {
+        "category": "alert", "title": "Diễn tập cảnh báo",
+        "summary": "Thông báo chỉ dùng để kiểm thử ứng dụng.",
+        "body": "Đây là nội dung diễn tập trong môi trường thử nghiệm, không phải cảnh báo chính thức.",
+        "area": "Khu vực thử nghiệm", "latitude": 21.03, "longitude": 105.85,
+    }
+    assert client.post("/bulletins", headers=CITIZEN, json=body).status_code == 403
+    created = client.post("/bulletins", headers=OPERATOR, json=body)
+    assert created.status_code == 201
+    bulletin_id = created.json()["id"]
+    assert created.json()["tenant"] == "tenant-1"
+    assert [item["id"] for item in client.get("/bulletins", headers=CITIZEN).json()] == [bulletin_id]
+    assert client.get("/bulletins", headers=OUTSIDER).json() == []
+    assert client.get(f"/bulletins/{bulletin_id}", headers=OUTSIDER).status_code == 404
 
 
 def test_citizen_cannot_transition_a_report():

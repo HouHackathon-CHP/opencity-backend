@@ -100,7 +100,44 @@ def main():
     status, finished = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=citizen)
     require(status, 200, finished)
     assert finished["state"] == "resolved" and len(finished["history"]) == 4
-    print("OpenCity smoke passed: authenticated reporting, image, tenant isolation, role checks and workflow.")
+    status, bulletins = send("GET", f"{GATEWAY}/api/opencity/bulletins", token=citizen)
+    require(status, 200, bulletins)
+    sample_title = "[DEMO] Cảnh báo thử nghiệm khu vực trung tâm"
+    if not any(item["title"] == sample_title for item in bulletins):
+        sample = {
+            "category": "alert", "title": sample_title,
+            "summary": "Đây là dữ liệu minh họa để kiểm tra bản đồ và màn cảnh báo OpenCity.",
+            "body": "Bản tin này chỉ dùng trong môi trường phát triển. Không phải thông báo chính thức của cơ quan nhà nước.",
+            "area": "Hà Nội (mô phỏng)", "latitude": 21.0285, "longitude": 105.8542,
+        }
+        status, rejected = send(
+            "POST", f"{GATEWAY}/api/opencity/bulletins", token=citizen,
+            body=json.dumps(sample).encode(), content_type="application/json",
+        )
+        require(status, 403, rejected)
+        status, created_bulletin = send(
+            "POST", f"{GATEWAY}/api/opencity/bulletins", token=operator,
+            body=json.dumps(sample).encode(), content_type="application/json",
+        )
+        require(status, 201, created_bulletin)
+        status, hidden = send(
+            "GET", f"{GATEWAY}/api/opencity/bulletins/{created_bulletin['id']}", token=outsider,
+        )
+        require(status, 404, hidden)
+    news_title = "[DEMO] Bản tin cộng đồng OpenCity"
+    if not any(item["title"] == news_title for item in bulletins):
+        sample_news = {
+            "category": "news", "title": news_title,
+            "summary": "Bản tin mẫu để kiểm tra mục Tin tức trong ứng dụng công dân.",
+            "body": "Đây là nội dung minh họa trong môi trường phát triển, không phải thông báo chính thức. Đơn vị vận hành có thể đăng bản tin thật qua API backend.",
+            "area": "Hà Nội (mô phỏng)",
+        }
+        status, created_news = send(
+            "POST", f"{GATEWAY}/api/opencity/bulletins", token=operator,
+            body=json.dumps(sample_news).encode(), content_type="application/json",
+        )
+        require(status, 201, created_news)
+    print("OpenCity smoke passed: reports, image, workflow, role checks, tenant isolation and bulletins.")
 
 
 if __name__ == "__main__":

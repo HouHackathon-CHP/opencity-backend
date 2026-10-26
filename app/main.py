@@ -3,11 +3,18 @@
 
 import hmac
 import os
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Literal
+from uuid import uuid4
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 
 INTERNAL_SECRET = os.getenv("INTERNAL_GATEWAY_SECRET", "")
@@ -17,6 +24,7 @@ MAX_PHOTO_BYTES = 10 * 1024 * 1024
 PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 REPORT_CATEGORIES = {"Hạ tầng", "Môi trường", "Giao thông", "Chiếu sáng", "Cây xanh", "Khác"}
 ACTIONS = {"triage", "assign", "resolve"}
+NEWS_DB_PATH = os.getenv("NEWS_DB_PATH", "data/bulletins.sqlite3")
 
 
 def matches_image_type(content: bytes, claimed_type: str) -> bool:
@@ -27,6 +35,39 @@ def matches_image_type(content: bytes, claimed_type: str) -> bool:
     )
 
 app = FastAPI(title="OpenCity Domain API", docs_url=None, redoc_url=None)
+
+
+class BulletinInput(BaseModel):
+    category: Literal["news", "alert"]
+    title: str = Field(min_length=5, max_length=160)
+    summary: str = Field(min_length=10, max_length=300)
+    body: str = Field(min_length=20, max_length=5000)
+    area: str | None = Field(default=None, max_length=120)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+
+
+def bulletin_db() -> sqlite3.Connection:
+    path = Path(NEWS_DB_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path, timeout=10)
+    connection.row_factory = sqlite3.Row
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS bulletins (
+            id TEXT PRIMARY KEY, tenant TEXT NOT NULL, category TEXT NOT NULL,
+            title TEXT NOT NULL, summary TEXT NOT NULL, body TEXT NOT NULL,
+            area TEXT, latitude REAL, longitude REAL,
+            published_at TEXT NOT NULL, created_by TEXT NOT NULL
+        )
+    """)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS bulletins_tenant_date ON bulletins(tenant, published_at DESC)"
+    )
+    return connection
+
+
+def bulletin_view(row: sqlite3.Row) -> dict:
+    return dict(row)
 
 
 @dataclass(frozen=True)
@@ -119,6 +160,52 @@ async def find_instance(report_id: str, identity: Caller) -> dict | None:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "opencity-backend"}
+
+
+@app.get("/bulletins")
+def list_bulletins(identity: Caller = Depends(caller)) -> list[dict]:
+    with closing(bulletin_db()) as connection:
+        rows = connection.execute(
+            "SELECT * FROM bulletins WHERE tenant = ? ORDER BY published_at DESC, rowid DESC LIMIT 100",
+            (identity.tenant,),
+        ).fetchall()
+    return [bulletin_view(row) for row in rows]
+
+
+@app.get("/bulletins/{bulletin_id}")
+def get_bulletin(bulletin_id: str, identity: Caller = Depends(caller)) -> dict:
+    with closing(bulletin_db()) as connection:
+        row = connection.execute(
+            "SELECT * FROM bulletins WHERE id = ? AND tenant = ?", (bulletin_id, identity.tenant)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Bulletin not found")
+    return bulletin_view(row)
+
+
+@app.post("/bulletins", status_code=201)
+def publish_bulletin(body: BulletinInput, identity: Caller = Depends(caller)) -> dict:
+    if not identity.roles.intersection({"operator", "admin"}):
+        raise HTTPException(status_code=403, detail="Operator role required")
+    if (body.latitude is None) != (body.longitude is None):
+        raise HTTPException(status_code=422, detail="Latitude and longitude must be provided together")
+    if not body.title.strip() or not body.summary.strip() or not body.body.strip():
+        raise HTTPException(status_code=422, detail="Bulletin text cannot be empty")
+    values = (
+        str(uuid4()), identity.tenant, body.category, body.title.strip(), body.summary.strip(),
+        body.body.strip(), body.area.strip() if body.area else None, body.latitude, body.longitude,
+        datetime.now(timezone.utc).isoformat(), identity.user,
+    )
+    with closing(bulletin_db()) as connection:
+        with connection:
+            connection.execute(
+                """INSERT INTO bulletins
+                   (id, tenant, category, title, summary, body, area, latitude, longitude, published_at, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                values,
+            )
+        row = connection.execute("SELECT * FROM bulletins WHERE id = ?", (values[0],)).fetchone()
+    return bulletin_view(row)
 
 
 @app.get("/reports")

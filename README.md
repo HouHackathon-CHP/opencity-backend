@@ -1,6 +1,6 @@
 # OpenCity Backend — domain API
 
-Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/opencity-frontend), deployed **behind** the [DX-OS Core](https://github.com/HouHackathon-CHP/dxos-core) gateway. The frontend and backend live in separate repositories. The core remains headless and reusable.
+Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/opencity-frontend) and [citizen mobile app](https://github.com/HouHackathon-CHP/opencity-mobile), deployed **behind** the [DX-OS Core](https://github.com/HouHackathon-CHP/dxos-core) gateway. Each application component lives in its own repository. The core remains headless and reusable.
 
 ## Responsibilities
 
@@ -8,6 +8,7 @@ Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/ope
 - Compose a tenant-scoped data record, optional stored object, and `report-handling` workflow instance.
 - Return one domain response to the frontend instead of exposing the data/workflow APIs as its application contract.
 - Restrict operator actions and image access. DX-OS Core independently enforces its tenant and role policy.
+- Publish tenant-scoped news and alerts for citizen apps. Only operators can publish; all authenticated members of that tenant can read.
 
 ## Local stack
 
@@ -31,8 +32,12 @@ The first command adds an internal `opencity-backend` service and configures the
 | `POST` | `/reports/{id}/actions/{action}` | Operator transition: triage, assign, resolve |
 | `POST` | `/reports/{id}/retry-workflow` | Recover a saved record without a workflow |
 | `GET` | `/reports/{id}/attachments/{object_id}` | Download a report's permitted image |
+| `GET` | `/bulletins`, `/bulletins/{id}` | Read tenant-scoped news and alerts |
+| `POST` | `/bulletins` | Publish a news item or alert (operator only) |
 
 The gateway prefixes these with `/api/opencity`.
+
+Bulletins use a separate persistent SQLite volume in the local Compose stack. They are entered by an operator; no official news feed is bundled. `POST /bulletins` accepts `category` (`news` or `alert`), `title`, `summary`, `body`, and optional `area`, `latitude`, `longitude`. The smoke script inserts one clearly marked `[DEMO]` alert if it is absent, so the mobile map and feed can be tested.
 
 ## Development
 
