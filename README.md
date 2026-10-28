@@ -9,6 +9,7 @@ Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/ope
 - Return one domain response to the frontend instead of exposing the data/workflow APIs as its application contract.
 - Restrict operator actions and image access. DX-OS Core independently enforces its tenant and role policy.
 - Publish tenant-scoped news and alerts for citizen apps. Only operators can publish; all authenticated members of that tenant can read.
+- Run tenant-scoped, single-choice surveys. Operators publish and close them; each account can answer once.
 
 ## Local stack
 
@@ -34,10 +35,16 @@ The first command adds an internal `opencity-backend` service and configures the
 | `GET` | `/reports/{id}/attachments/{object_id}` | Download a report's permitted image |
 | `GET` | `/bulletins`, `/bulletins/{id}` | Read tenant-scoped news and alerts |
 | `POST` | `/bulletins` | Publish a news item or alert (operator only) |
+| `GET` | `/surveys`, `/surveys/{id}` | Read tenant surveys and permitted results |
+| `POST` | `/surveys` | Publish a survey with 2–8 options (operator only) |
+| `POST` | `/surveys/{id}/answers` | Answer once with an option ID |
+| `POST` | `/surveys/{id}/close` | Close a survey (operator only) |
 
 The gateway prefixes these with `/api/opencity`.
 
 Bulletins use a separate persistent SQLite volume in the local Compose stack. They are entered by an operator; no official news feed is bundled. `POST /bulletins` accepts `category` (`news` or `alert`), `title`, `summary`, `body`, and optional `area`, `latitude`, `longitude`. The smoke script inserts one clearly marked `[DEMO]` alert if it is absent, so the mobile map and feed can be tested.
+
+Surveys use a separate SQLite file in that persistent volume. The API enforces one answer per user and validates that the chosen option belongs to the survey. Citizens see vote totals only after they answer or the survey closes; operators see totals while it is open. `smoke_app.py` seeds one `[DEMO]` survey without submitting an answer for the citizen account.
 
 ## Development
 

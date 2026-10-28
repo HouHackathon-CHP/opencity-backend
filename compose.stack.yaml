@@ -14,6 +14,7 @@ services:
       WORKFLOW_URL: http://workflow:8000
       INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:?Create .env from dxos-core/.env.example}
       NEWS_DB_PATH: /service/data/bulletins.sqlite3
+      SURVEY_DB_PATH: /service/data/surveys.sqlite3
     depends_on:
       - data
       - workflow

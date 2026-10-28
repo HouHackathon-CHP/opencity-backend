@@ -137,7 +137,29 @@ def main():
             body=json.dumps(sample_news).encode(), content_type="application/json",
         )
         require(status, 201, created_news)
-    print("OpenCity smoke passed: reports, image, workflow, role checks, tenant isolation and bulletins.")
+    status, surveys = send("GET", f"{GATEWAY}/api/opencity/surveys", token=citizen)
+    require(status, 200, surveys)
+    survey_title = "[DEMO] Ưu tiên cải thiện không gian công cộng"
+    demo_survey = next((item for item in surveys if item["title"] == survey_title), None)
+    if demo_survey is None:
+        sample_survey = {
+            "title": survey_title,
+            "description": "Khảo sát minh họa để thử tính năng bình chọn; không phải cuộc lấy ý kiến chính thức.",
+            "options": ["Thêm cây xanh", "Cải thiện chiếu sáng", "Bổ sung ghế nghỉ"],
+        }
+        status, rejected = send("POST", f"{GATEWAY}/api/opencity/surveys", token=citizen,
+                                body=json.dumps(sample_survey).encode(), content_type="application/json")
+        require(status, 403, rejected)
+        status, demo_survey = send("POST", f"{GATEWAY}/api/opencity/surveys", token=operator,
+                                   body=json.dumps(sample_survey).encode(), content_type="application/json")
+        require(status, 201, demo_survey)
+    survey_id = demo_survey["id"]
+    status, hidden = send("GET", f"{GATEWAY}/api/opencity/surveys/{survey_id}", token=outsider)
+    require(status, 404, hidden)
+    status, detail = send("GET", f"{GATEWAY}/api/opencity/surveys/{survey_id}", token=citizen)
+    require(status, 200, detail)
+    assert detail["status"] == "open" and len(detail["options"]) == 3
+    print("OpenCity smoke passed: reports, images, workflows, bulletins, surveys, roles and tenants.")
 
 
 if __name__ == "__main__":

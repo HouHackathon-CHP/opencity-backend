@@ -16,6 +16,7 @@ OUTSIDER = {**CITIZEN, "X-DXOS-Tenant": "tenant-2"}
 def test_direct_request_is_rejected():
     assert client.get("/reports").status_code == 403
     assert client.get("/bulletins").status_code == 403
+    assert client.get("/surveys").status_code == 403
 
 
 def test_bulletins_are_operator_published_and_tenant_scoped(monkeypatch, tmp_path):
@@ -34,6 +35,55 @@ def test_bulletins_are_operator_published_and_tenant_scoped(monkeypatch, tmp_pat
     assert [item["id"] for item in client.get("/bulletins", headers=CITIZEN).json()] == [bulletin_id]
     assert client.get("/bulletins", headers=OUTSIDER).json() == []
     assert client.get(f"/bulletins/{bulletin_id}", headers=OUTSIDER).status_code == 404
+
+
+def test_survey_lifecycle_is_tenant_scoped_and_one_answer_per_user(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "SURVEY_DB_PATH", str(tmp_path / "surveys.sqlite3"))
+    body = {"title": "Khảo sát tuyến phố", "description": "Chọn ưu tiên cải thiện tuyến phố trong tháng tới.",
+            "options": ["Thêm cây xanh", "Cải thiện chiếu sáng"]}
+    assert client.post("/surveys", headers=CITIZEN, json=body).status_code == 403
+    created = client.post("/surveys", headers=OPERATOR, json=body)
+    assert created.status_code == 201
+    survey = created.json()
+    survey_id = survey["id"]
+    first_option = survey["options"][0]["id"]
+    assert survey["status"] == "open"
+    assert survey["total_responses"] == 0
+    listing = client.get("/surveys", headers=CITIZEN).json()
+    assert listing[0]["id"] == survey_id
+    assert listing[0]["my_option_id"] is None
+    detail = client.get(f"/surveys/{survey_id}", headers=CITIZEN).json()
+    assert detail["total_responses"] is None
+    assert all(option["votes"] is None for option in detail["options"])
+    assert client.get("/surveys", headers=OUTSIDER).json() == []
+    assert client.get(f"/surveys/{survey_id}", headers=OUTSIDER).status_code == 404
+    assert client.post(f"/surveys/{survey_id}/answers", headers=OUTSIDER,
+                       json={"option_id": first_option}).status_code == 404
+    assert client.post(f"/surveys/{survey_id}/answers", headers=CITIZEN,
+                       json={"option_id": "unknown"}).status_code == 422
+    answered = client.post(f"/surveys/{survey_id}/answers", headers=CITIZEN,
+                           json={"option_id": first_option})
+    assert answered.status_code == 200
+    assert answered.json()["my_option_id"] == first_option
+    assert answered.json()["total_responses"] == 1
+    assert answered.json()["options"][0]["votes"] == 1
+    assert client.post(f"/surveys/{survey_id}/answers", headers=CITIZEN,
+                       json={"option_id": first_option}).status_code == 409
+    assert client.post(f"/surveys/{survey_id}/close", headers=CITIZEN).status_code == 403
+    assert client.post(f"/surveys/{survey_id}/close", headers=OUTSIDER).status_code == 403
+    closed = client.post(f"/surveys/{survey_id}/close", headers=OPERATOR)
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "closed"
+    assert client.post(f"/surveys/{survey_id}/answers", headers=OPERATOR,
+                       json={"option_id": first_option}).status_code == 409
+
+
+def test_survey_rejects_duplicate_or_blank_options(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "SURVEY_DB_PATH", str(tmp_path / "surveys.sqlite3"))
+    base = {"title": "Khảo sát thử nghiệm", "description": "Nội dung chỉ phục vụ kiểm thử chức năng khảo sát."}
+    for options in (["Một", "một"], ["Một", "  "]):
+        response = client.post("/surveys", headers=OPERATOR, json={**base, "options": options})
+        assert response.status_code == 422
 
 
 def test_citizen_cannot_transition_a_report():

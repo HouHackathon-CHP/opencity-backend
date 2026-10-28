@@ -25,6 +25,7 @@ PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 REPORT_CATEGORIES = {"Hạ tầng", "Môi trường", "Giao thông", "Chiếu sáng", "Cây xanh", "Khác"}
 ACTIONS = {"triage", "assign", "resolve"}
 NEWS_DB_PATH = os.getenv("NEWS_DB_PATH", "data/bulletins.sqlite3")
+SURVEY_DB_PATH = os.getenv("SURVEY_DB_PATH", "data/surveys.sqlite3")
 
 
 def matches_image_type(content: bytes, claimed_type: str) -> bool:
@@ -45,6 +46,16 @@ class BulletinInput(BaseModel):
     area: str | None = Field(default=None, max_length=120)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
+
+
+class SurveyInput(BaseModel):
+    title: str = Field(min_length=5, max_length=160)
+    description: str = Field(min_length=20, max_length=2000)
+    options: list[str] = Field(min_length=2, max_length=8)
+
+
+class SurveyAnswer(BaseModel):
+    option_id: str
 
 
 def bulletin_db() -> sqlite3.Connection:
@@ -68,6 +79,62 @@ def bulletin_db() -> sqlite3.Connection:
 
 def bulletin_view(row: sqlite3.Row) -> dict:
     return dict(row)
+
+
+def survey_db() -> sqlite3.Connection:
+    path = Path(SURVEY_DB_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path, timeout=10)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS surveys (
+            id TEXT PRIMARY KEY, tenant TEXT NOT NULL, title TEXT NOT NULL,
+            description TEXT NOT NULL, status TEXT NOT NULL,
+            created_at TEXT NOT NULL, closed_at TEXT, created_by TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS surveys_tenant_date ON surveys(tenant, created_at DESC);
+        CREATE TABLE IF NOT EXISTS survey_options (
+            id TEXT PRIMARY KEY, survey_id TEXT NOT NULL REFERENCES surveys(id),
+            label TEXT NOT NULL, position INTEGER NOT NULL,
+            UNIQUE(survey_id, position)
+        );
+        CREATE TABLE IF NOT EXISTS survey_answers (
+            survey_id TEXT NOT NULL REFERENCES surveys(id),
+            user_id TEXT NOT NULL, option_id TEXT NOT NULL REFERENCES survey_options(id),
+            created_at TEXT NOT NULL, PRIMARY KEY(survey_id, user_id)
+        );
+    """)
+    return connection
+
+
+def survey_row(connection: sqlite3.Connection, survey_id: str, identity: "Caller") -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT * FROM surveys WHERE id = ? AND tenant = ?", (survey_id, identity.tenant)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Survey not found")
+    return row
+
+
+def survey_view(connection: sqlite3.Connection, row: sqlite3.Row, identity: "Caller") -> dict:
+    answer = connection.execute(
+        "SELECT option_id FROM survey_answers WHERE survey_id = ? AND user_id = ?",
+        (row["id"], identity.user),
+    ).fetchone()
+    my_option_id = answer["option_id"] if answer else None
+    show_results = bool(my_option_id or row["status"] == "closed" or identity.roles.intersection({"operator", "admin"}))
+    options = connection.execute("""
+        SELECT o.id, o.label, COUNT(a.user_id) AS votes
+        FROM survey_options o LEFT JOIN survey_answers a ON a.option_id = o.id
+        WHERE o.survey_id = ? GROUP BY o.id ORDER BY o.position
+    """, (row["id"],)).fetchall()
+    return {
+        **dict(row), "my_option_id": my_option_id,
+        "options": [{"id": option["id"], "label": option["label"],
+                     "votes": option["votes"] if show_results else None} for option in options],
+        "total_responses": sum(option["votes"] for option in options) if show_results else None,
+    }
 
 
 @dataclass(frozen=True)
@@ -206,6 +273,89 @@ def publish_bulletin(body: BulletinInput, identity: Caller = Depends(caller)) ->
             )
         row = connection.execute("SELECT * FROM bulletins WHERE id = ?", (values[0],)).fetchone()
     return bulletin_view(row)
+
+
+@app.get("/surveys")
+def list_surveys(identity: Caller = Depends(caller)) -> list[dict]:
+    with closing(survey_db()) as connection:
+        rows = connection.execute("""
+            SELECT s.id, s.title, s.description, s.status, s.created_at, s.closed_at,
+                   a.option_id AS my_option_id
+            FROM surveys s LEFT JOIN survey_answers a
+              ON a.survey_id = s.id AND a.user_id = ?
+            WHERE s.tenant = ? ORDER BY s.created_at DESC, s.rowid DESC LIMIT 100
+        """, (identity.user, identity.tenant)).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/surveys", status_code=201)
+def create_survey(body: SurveyInput, identity: Caller = Depends(caller)) -> dict:
+    if not identity.roles.intersection({"operator", "admin"}):
+        raise HTTPException(status_code=403, detail="Operator role required")
+    labels = [option.strip() for option in body.options]
+    if (not body.title.strip() or not body.description.strip() or
+            any(not label or len(label) > 120 for label in labels) or
+            len({label.casefold() for label in labels}) != len(labels)):
+        raise HTTPException(status_code=422, detail="Survey fields or options are invalid")
+    survey_id = str(uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    with closing(survey_db()) as connection:
+        with connection:
+            connection.execute("""
+                INSERT INTO surveys (id, tenant, title, description, status, created_at, created_by)
+                VALUES (?, ?, ?, ?, 'open', ?, ?)
+            """, (survey_id, identity.tenant, body.title.strip(), body.description.strip(), now, identity.user))
+            connection.executemany(
+                "INSERT INTO survey_options (id, survey_id, label, position) VALUES (?, ?, ?, ?)",
+                [(str(uuid4()), survey_id, label, position) for position, label in enumerate(labels)],
+            )
+        return survey_view(connection, survey_row(connection, survey_id, identity), identity)
+
+
+@app.get("/surveys/{survey_id}")
+def get_survey(survey_id: str, identity: Caller = Depends(caller)) -> dict:
+    with closing(survey_db()) as connection:
+        return survey_view(connection, survey_row(connection, survey_id, identity), identity)
+
+
+@app.post("/surveys/{survey_id}/answers")
+def answer_survey(survey_id: str, body: SurveyAnswer, identity: Caller = Depends(caller)) -> dict:
+    with closing(survey_db()) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = survey_row(connection, survey_id, identity)
+            if row["status"] != "open":
+                raise HTTPException(status_code=409, detail="Survey is closed")
+            option = connection.execute(
+                "SELECT id FROM survey_options WHERE id = ? AND survey_id = ?",
+                (body.option_id, survey_id),
+            ).fetchone()
+            if option is None:
+                raise HTTPException(status_code=422, detail="Option does not belong to survey")
+            try:
+                connection.execute(
+                    "INSERT INTO survey_answers (survey_id, user_id, option_id, created_at) VALUES (?, ?, ?, ?)",
+                    (survey_id, identity.user, option["id"], datetime.now(timezone.utc).isoformat()),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise HTTPException(status_code=409, detail="Survey already answered") from exc
+        return survey_view(connection, row, identity)
+
+
+@app.post("/surveys/{survey_id}/close")
+def close_survey(survey_id: str, identity: Caller = Depends(caller)) -> dict:
+    if not identity.roles.intersection({"operator", "admin"}):
+        raise HTTPException(status_code=403, detail="Operator role required")
+    with closing(survey_db()) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = survey_row(connection, survey_id, identity)
+            if row["status"] == "open":
+                connection.execute(
+                    "UPDATE surveys SET status = 'closed', closed_at = ? WHERE id = ?",
+                    (datetime.now(timezone.utc).isoformat(), survey_id),
+                )
+        return survey_view(connection, survey_row(connection, survey_id, identity), identity)
 
 
 @app.get("/reports")
