@@ -24,6 +24,11 @@ MAX_PHOTO_BYTES = 10 * 1024 * 1024
 PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 REPORT_CATEGORIES = {"Hạ tầng", "Môi trường", "Giao thông", "Chiếu sáng", "Cây xanh", "Khác"}
 ACTIONS = {"triage", "assign", "resolve"}
+MANAGEMENT_ROLES = {
+    "reports": "reports_operator",
+    "bulletins": "bulletins_operator",
+    "surveys": "surveys_operator",
+}
 NEWS_DB_PATH = os.getenv("NEWS_DB_PATH", "data/bulletins.sqlite3")
 SURVEY_DB_PATH = os.getenv("SURVEY_DB_PATH", "data/surveys.sqlite3")
 
@@ -123,7 +128,7 @@ def survey_view(connection: sqlite3.Connection, row: sqlite3.Row, identity: "Cal
         (row["id"], identity.user),
     ).fetchone()
     my_option_id = answer["option_id"] if answer else None
-    show_results = bool(my_option_id or row["status"] == "closed" or identity.roles.intersection({"operator", "admin"}))
+    show_results = bool(my_option_id or row["status"] == "closed" or can_manage(identity, "surveys"))
     options = connection.execute("""
         SELECT o.id, o.label, COUNT(a.user_id) AS votes
         FROM survey_options o LEFT JOIN survey_answers a ON a.option_id = o.id
@@ -144,6 +149,15 @@ class Caller:
     roles: frozenset[str]
 
 
+def can_manage(identity: Caller, feature: str) -> bool:
+    return "admin" in identity.roles or MANAGEMENT_ROLES[feature] in identity.roles
+
+
+def require_manager(identity: Caller, feature: str) -> None:
+    if not can_manage(identity, feature):
+        raise HTTPException(status_code=403, detail=f"{MANAGEMENT_ROLES[feature]} role required")
+
+
 def caller(
     x_internal_secret: str | None = Header(default=None),
     x_dxos_user: str | None = Header(default=None),
@@ -160,11 +174,16 @@ def caller(
 
 
 def core_headers(identity: Caller) -> dict[str, str]:
+    # Only this business API may delegate report access to the generic core.
+    # The gateway denies browser/mobile access to generic core routes.
+    core_roles = set(identity.roles) - {"operator"}
+    if can_manage(identity, "reports"):
+        core_roles.add("operator")
     return {
         "X-Internal-Secret": INTERNAL_SECRET,
         "X-DXOS-User": identity.user,
         "X-DXOS-Tenant": identity.tenant,
-        "X-DXOS-Roles": ",".join(identity.roles),
+        "X-DXOS-Roles": ",".join(sorted(core_roles)),
     }
 
 
@@ -229,6 +248,11 @@ def health() -> dict:
     return {"status": "ok", "service": "opencity-backend"}
 
 
+@app.get("/me/capabilities")
+def my_capabilities(identity: Caller = Depends(caller)) -> dict:
+    return {"management": [feature for feature in MANAGEMENT_ROLES if can_manage(identity, feature)]}
+
+
 @app.get("/bulletins")
 def list_bulletins(identity: Caller = Depends(caller)) -> list[dict]:
     with closing(bulletin_db()) as connection:
@@ -252,8 +276,7 @@ def get_bulletin(bulletin_id: str, identity: Caller = Depends(caller)) -> dict:
 
 @app.post("/bulletins", status_code=201)
 def publish_bulletin(body: BulletinInput, identity: Caller = Depends(caller)) -> dict:
-    if not identity.roles.intersection({"operator", "admin"}):
-        raise HTTPException(status_code=403, detail="Operator role required")
+    require_manager(identity, "bulletins")
     if (body.latitude is None) != (body.longitude is None):
         raise HTTPException(status_code=422, detail="Latitude and longitude must be provided together")
     if not body.title.strip() or not body.summary.strip() or not body.body.strip():
@@ -290,8 +313,7 @@ def list_surveys(identity: Caller = Depends(caller)) -> list[dict]:
 
 @app.post("/surveys", status_code=201)
 def create_survey(body: SurveyInput, identity: Caller = Depends(caller)) -> dict:
-    if not identity.roles.intersection({"operator", "admin"}):
-        raise HTTPException(status_code=403, detail="Operator role required")
+    require_manager(identity, "surveys")
     labels = [option.strip() for option in body.options]
     if (not body.title.strip() or not body.description.strip() or
             any(not label or len(label) > 120 for label in labels) or
@@ -344,8 +366,7 @@ def answer_survey(survey_id: str, body: SurveyAnswer, identity: Caller = Depends
 
 @app.post("/surveys/{survey_id}/close")
 def close_survey(survey_id: str, identity: Caller = Depends(caller)) -> dict:
-    if not identity.roles.intersection({"operator", "admin"}):
-        raise HTTPException(status_code=403, detail="Operator role required")
+    require_manager(identity, "surveys")
     with closing(survey_db()) as connection:
         with connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -448,8 +469,7 @@ async def retry_workflow(report_id: str, identity: Caller = Depends(caller)) -> 
 
 @app.post("/reports/{report_id}/actions/{action}")
 async def take_action(report_id: str, action: str, identity: Caller = Depends(caller)) -> dict:
-    if not identity.roles.intersection({"operator", "admin"}):
-        raise HTTPException(status_code=403, detail="Operator role required")
+    require_manager(identity, "reports")
     if action not in ACTIONS:
         raise HTTPException(status_code=404, detail="Unknown action")
     record = await get_report_record(report_id, identity)

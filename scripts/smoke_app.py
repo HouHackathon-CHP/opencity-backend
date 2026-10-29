@@ -9,6 +9,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+from provision_roles import provision
+
 
 ROOT = Path(__file__).resolve().parents[2]
 GATEWAY = "http://localhost:8000"
@@ -63,12 +65,21 @@ def require(actual, expected, result):
 
 
 def main():
+    provision()
     values = env_values()
     citizen = token("dxos-citizen", values["DEMO_CITIZEN_PASSWORD"])
-    operator = token("dxos-operator", values["DEMO_OPERATOR_PASSWORD"])
+    reports_operator = token("dxos-reports", values["DEMO_OPERATOR_PASSWORD"])
+    bulletins_operator = token("dxos-bulletins", values["DEMO_OPERATOR_PASSWORD"])
+    surveys_operator = token("dxos-surveys", values["DEMO_OPERATOR_PASSWORD"])
     outsider = token("dxos-outsider", values["DEMO_OUTSIDER_PASSWORD"])
     status, result = send("GET", f"{GATEWAY}/api/opencity/reports")
     require(status, 401, result)  # no token
+    for user_token, expected in ((reports_operator, ["reports"]),
+                                 (bulletins_operator, ["bulletins"]),
+                                 (surveys_operator, ["surveys"])):
+        status, capabilities = send("GET", f"{GATEWAY}/api/opencity/me/capabilities", token=user_token)
+        require(status, 200, capabilities)
+        assert capabilities["management"] == expected
     png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9xVzgAAAAASUVORK5CYII=")
     body, content_type = multipart({
         "title": "Đèn đường hỏng ở ngõ thử nghiệm",
@@ -88,13 +99,18 @@ def main():
     assert photo_content == png
     status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/triage", token=citizen)
     require(status, 403, result)
+    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/triage", token=bulletins_operator)
+    require(status, 403, result)
+    status, result = send("GET", f"{GATEWAY}/api/data/records", token=reports_operator)
+    require(status, 200, result)
+    assert report_id not in {item["id"] for item in result}
     status, result = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=outsider)
     require(status, 404, result)
     status, other_list = send("GET", f"{GATEWAY}/api/opencity/reports", token=outsider)
     require(status, 200, other_list)
     assert report_id not in {item["id"] for item in other_list}
     for action, expected_state in [("triage", "triaged"), ("assign", "assigned"), ("resolve", "resolved")]:
-        status, changed = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/{action}", token=operator)
+        status, changed = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/{action}", token=reports_operator)
         require(status, 200, changed)
         assert changed["state"] == expected_state
     status, finished = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=citizen)
@@ -116,7 +132,7 @@ def main():
         )
         require(status, 403, rejected)
         status, created_bulletin = send(
-            "POST", f"{GATEWAY}/api/opencity/bulletins", token=operator,
+            "POST", f"{GATEWAY}/api/opencity/bulletins", token=bulletins_operator,
             body=json.dumps(sample).encode(), content_type="application/json",
         )
         require(status, 201, created_bulletin)
@@ -133,7 +149,7 @@ def main():
             "area": "Hà Nội (mô phỏng)",
         }
         status, created_news = send(
-            "POST", f"{GATEWAY}/api/opencity/bulletins", token=operator,
+            "POST", f"{GATEWAY}/api/opencity/bulletins", token=bulletins_operator,
             body=json.dumps(sample_news).encode(), content_type="application/json",
         )
         require(status, 201, created_news)
@@ -150,7 +166,7 @@ def main():
         status, rejected = send("POST", f"{GATEWAY}/api/opencity/surveys", token=citizen,
                                 body=json.dumps(sample_survey).encode(), content_type="application/json")
         require(status, 403, rejected)
-        status, demo_survey = send("POST", f"{GATEWAY}/api/opencity/surveys", token=operator,
+        status, demo_survey = send("POST", f"{GATEWAY}/api/opencity/surveys", token=surveys_operator,
                                    body=json.dumps(sample_survey).encode(), content_type="application/json")
         require(status, 201, demo_survey)
     survey_id = demo_survey["id"]

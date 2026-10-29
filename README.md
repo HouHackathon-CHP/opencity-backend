@@ -7,9 +7,9 @@ Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/ope
 - Validate field report data and image size/type.
 - Compose a tenant-scoped data record, optional stored object, and `report-handling` workflow instance.
 - Return one domain response to the frontend instead of exposing the data/workflow APIs as its application contract.
-- Restrict operator actions and image access. DX-OS Core independently enforces its tenant and role policy.
-- Publish tenant-scoped news and alerts for citizen apps. Only operators can publish; all authenticated members of that tenant can read.
-- Run tenant-scoped, single-choice surveys. Operators publish and close them; each account can answer once.
+- Restrict management actions by feature role and report/image access by tenant and owner. The backend delegates report management to the generic core only after checking `reports_operator`.
+- Publish tenant-scoped news and alerts for citizen apps. Only `bulletins_operator` or `admin` can publish; all authenticated members of that tenant can read.
+- Run tenant-scoped, single-choice surveys. `surveys_operator` or `admin` can publish and close them; each account can answer once.
 
 ## Local stack
 
@@ -23,22 +23,27 @@ python scripts\smoke_app.py
 
 The first command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail.
 
+Run `python scripts/provision_roles.py` after the core smoke script to create three separate local demo staff accounts: `dxos-reports`, `dxos-bulletins`, and `dxos-surveys`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff accounts, assign only the matching Keycloak realm role(s); `admin` grants all three. The core's legacy `operator` role grants no OpenCity management permission.
+
+`GET /me/capabilities` returns the authenticated caller's management features. Public news and surveys remain readable by authenticated citizens. Report lists contain the caller's own cases or, for `reports_operator`, all reports in that tenant. The web hides unauthorized staff routes, while API checks remain authoritative.
+
 ### Routes
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| `GET` | `/me/capabilities` | List the caller's management features |
 | `GET` | `/reports` | List reports visible to the caller |
 | `POST` | `/reports` | Create a report (multipart form, optional photo) |
 | `GET` | `/reports/{id}` | Report and workflow history |
-| `POST` | `/reports/{id}/actions/{action}` | Operator transition: triage, assign, resolve |
+| `POST` | `/reports/{id}/actions/{action}` | `reports_operator` transition: triage, assign, resolve |
 | `POST` | `/reports/{id}/retry-workflow` | Recover a saved record without a workflow |
 | `GET` | `/reports/{id}/attachments/{object_id}` | Download a report's permitted image |
 | `GET` | `/bulletins`, `/bulletins/{id}` | Read tenant-scoped news and alerts |
-| `POST` | `/bulletins` | Publish a news item or alert (operator only) |
+| `POST` | `/bulletins` | Publish a news item or alert (`bulletins_operator`) |
 | `GET` | `/surveys`, `/surveys/{id}` | Read tenant surveys and permitted results |
-| `POST` | `/surveys` | Publish a survey with 2–8 options (operator only) |
+| `POST` | `/surveys` | Publish a survey with 2–8 options (`surveys_operator`) |
 | `POST` | `/surveys/{id}/answers` | Answer once with an option ID |
-| `POST` | `/surveys/{id}/close` | Close a survey (operator only) |
+| `POST` | `/surveys/{id}/close` | Close a survey (`surveys_operator`) |
 
 The gateway prefixes these with `/api/opencity`.
 

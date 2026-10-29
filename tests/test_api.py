@@ -9,7 +9,10 @@ from app import main  # noqa: E402
 
 client = TestClient(main.app)
 CITIZEN = {"X-Internal-Secret": "test-secret", "X-DXOS-User": "citizen-1", "X-DXOS-Tenant": "tenant-1", "X-DXOS-Roles": "citizen"}
-OPERATOR = {**CITIZEN, "X-DXOS-User": "operator-1", "X-DXOS-Roles": "operator"}
+REPORTS_OPERATOR = {**CITIZEN, "X-DXOS-User": "reports-1", "X-DXOS-Roles": "reports_operator"}
+BULLETINS_OPERATOR = {**CITIZEN, "X-DXOS-User": "bulletins-1", "X-DXOS-Roles": "bulletins_operator"}
+SURVEYS_OPERATOR = {**CITIZEN, "X-DXOS-User": "surveys-1", "X-DXOS-Roles": "surveys_operator"}
+LEGACY_OPERATOR = {**CITIZEN, "X-DXOS-User": "legacy-1", "X-DXOS-Roles": "operator"}
 OUTSIDER = {**CITIZEN, "X-DXOS-Tenant": "tenant-2"}
 
 
@@ -28,7 +31,7 @@ def test_bulletins_are_operator_published_and_tenant_scoped(monkeypatch, tmp_pat
         "area": "Khu vực thử nghiệm", "latitude": 21.03, "longitude": 105.85,
     }
     assert client.post("/bulletins", headers=CITIZEN, json=body).status_code == 403
-    created = client.post("/bulletins", headers=OPERATOR, json=body)
+    created = client.post("/bulletins", headers=BULLETINS_OPERATOR, json=body)
     assert created.status_code == 201
     bulletin_id = created.json()["id"]
     assert created.json()["tenant"] == "tenant-1"
@@ -42,7 +45,7 @@ def test_survey_lifecycle_is_tenant_scoped_and_one_answer_per_user(monkeypatch, 
     body = {"title": "Khảo sát tuyến phố", "description": "Chọn ưu tiên cải thiện tuyến phố trong tháng tới.",
             "options": ["Thêm cây xanh", "Cải thiện chiếu sáng"]}
     assert client.post("/surveys", headers=CITIZEN, json=body).status_code == 403
-    created = client.post("/surveys", headers=OPERATOR, json=body)
+    created = client.post("/surveys", headers=SURVEYS_OPERATOR, json=body)
     assert created.status_code == 201
     survey = created.json()
     survey_id = survey["id"]
@@ -71,10 +74,10 @@ def test_survey_lifecycle_is_tenant_scoped_and_one_answer_per_user(monkeypatch, 
                        json={"option_id": first_option}).status_code == 409
     assert client.post(f"/surveys/{survey_id}/close", headers=CITIZEN).status_code == 403
     assert client.post(f"/surveys/{survey_id}/close", headers=OUTSIDER).status_code == 403
-    closed = client.post(f"/surveys/{survey_id}/close", headers=OPERATOR)
+    closed = client.post(f"/surveys/{survey_id}/close", headers=SURVEYS_OPERATOR)
     assert closed.status_code == 200
     assert closed.json()["status"] == "closed"
-    assert client.post(f"/surveys/{survey_id}/answers", headers=OPERATOR,
+    assert client.post(f"/surveys/{survey_id}/answers", headers=SURVEYS_OPERATOR,
                        json={"option_id": first_option}).status_code == 409
 
 
@@ -82,12 +85,41 @@ def test_survey_rejects_duplicate_or_blank_options(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "SURVEY_DB_PATH", str(tmp_path / "surveys.sqlite3"))
     base = {"title": "Khảo sát thử nghiệm", "description": "Nội dung chỉ phục vụ kiểm thử chức năng khảo sát."}
     for options in (["Một", "một"], ["Một", "  "]):
-        response = client.post("/surveys", headers=OPERATOR, json={**base, "options": options})
+        response = client.post("/surveys", headers=SURVEYS_OPERATOR, json={**base, "options": options})
         assert response.status_code == 422
 
 
 def test_citizen_cannot_transition_a_report():
     assert client.post("/reports/report-1/actions/triage", headers=CITIZEN).status_code == 403
+
+
+def test_feature_roles_are_isolated():
+    expected = {
+        "reports": ["reports"], "bulletins": ["bulletins"], "surveys": ["surveys"],
+    }
+    for feature, headers in (("reports", REPORTS_OPERATOR), ("bulletins", BULLETINS_OPERATOR),
+                             ("surveys", SURVEYS_OPERATOR)):
+        assert client.get("/me/capabilities", headers=headers).json() == {"management": expected[feature]}
+    assert client.get("/me/capabilities", headers=LEGACY_OPERATOR).json() == {"management": []}
+    assert client.get("/me/capabilities", headers={**CITIZEN, "X-DXOS-Roles": "admin"}).json() == {
+        "management": ["reports", "bulletins", "surveys"]}
+    assert client.post("/reports/report-1/actions/triage", headers=BULLETINS_OPERATOR).status_code == 403
+    assert client.post("/reports/report-1/actions/triage", headers=LEGACY_OPERATOR).status_code == 403
+    bulletin = {"category": "news", "title": "Thông báo mẫu", "summary": "Thông báo kiểm thử quyền.",
+                "body": "Nội dung kiểm thử phân quyền giữa các nghiệp vụ OpenCity."}
+    survey = {"title": "Khảo sát mẫu", "description": "Nội dung kiểm thử phân quyền khảo sát.",
+              "options": ["Đồng ý", "Không đồng ý"]}
+    assert client.post("/bulletins", headers=REPORTS_OPERATOR, json=bulletin).status_code == 403
+    assert client.post("/surveys", headers=BULLETINS_OPERATOR, json=survey).status_code == 403
+    assert client.post("/bulletins", headers=SURVEYS_OPERATOR, json=bulletin).status_code == 403
+    assert "operator" not in main.core_headers(main.caller(**{
+        "x_internal_secret": "test-secret", "x_dxos_user": "legacy-1",
+        "x_dxos_tenant": "tenant-1", "x_dxos_roles": "operator",
+    }))["X-DXOS-Roles"]
+    assert "operator" in main.core_headers(main.caller(**{
+        "x_internal_secret": "test-secret", "x_dxos_user": "reports-1",
+        "x_dxos_tenant": "tenant-1", "x_dxos_roles": "reports_operator",
+    }))["X-DXOS-Roles"]
 
 
 def test_invalid_category_is_rejected_before_core_call(monkeypatch):
