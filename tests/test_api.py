@@ -215,6 +215,15 @@ def test_dispatch_accept_transfer_and_resolve(monkeypatch, tmp_path):
     assert assigned.status_code == 200
     assert assigned.json()["state"] == "assigned"
     assert assigned.json()["assigned_unit"] == "environment"
+    env_notifications = client.get("/notifications", headers=ENVIRONMENT_OPERATOR).json()
+    assert any(item["kind"] == "assigned" for item in env_notifications)
+    assert client.get("/notifications", headers=REPORTS_OPERATOR).json() == []
+    citizen_notifications = client.get("/notifications", headers=CITIZEN).json()
+    assert citizen_notifications[0]["kind"] == "assigned" and citizen_notifications[0]["read_at"] is None
+    notification_id = citizen_notifications[0]["id"]
+    assert client.post(f"/notifications/{notification_id}/read", headers=OUTSIDER).status_code == 404
+    assert client.post(f"/notifications/{notification_id}/read", headers=CITIZEN).status_code == 200
+    assert client.get("/notifications", headers=CITIZEN).json()[0]["read_at"]
     assert client.get(route, headers=REPORTS_OPERATOR).status_code == 404
     assert client.get(route, headers=ENVIRONMENT_OPERATOR).status_code == 200
     assert client.post(f"{route}/actions/resolve", headers=ENVIRONMENT_OPERATOR).status_code == 409
@@ -238,6 +247,8 @@ def test_dispatch_accept_transfer_and_resolve(monkeypatch, tmp_path):
                              json={**dispatch, "unit_id": "infrastructure", "note": "Duyệt chuyển đơn vị"})
     assert reassigned.status_code == 200 and reassigned.json()["assigned_unit"] == "infrastructure"
     assert client.get(route, headers=ENVIRONMENT_OPERATOR).status_code == 404
+    assert client.get("/notifications", headers=ENVIRONMENT_OPERATOR).json() == []
+    assert any(item["kind"] == "reassigned" for item in client.get("/notifications", headers=REPORTS_OPERATOR).json())
     assert client.post(f"{route}/accept", headers=REPORTS_OPERATOR).status_code == 200
     resolved = client.post(f"{route}/actions/resolve", headers=REPORTS_OPERATOR)
     assert resolved.status_code == 200 and resolved.json()["state"] == "resolved"
@@ -270,7 +281,8 @@ def test_spoofed_image_is_rejected_before_core_call(monkeypatch):
     assert result.status_code == 422
 
 
-def test_create_report_uses_data_and_workflow(monkeypatch):
+def test_create_report_uses_data_and_workflow(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
     calls = []
 
     async def fake_core(base, path, identity, method="GET", **kwargs):
@@ -293,5 +305,28 @@ def test_create_report_uses_data_and_workflow(monkeypatch):
     })
     assert result.status_code == 201
     assert result.json()["state"] == "submitted"
+    assert client.get("/notifications", headers=DISPATCHER).json()[0]["kind"] == "new_report"
     assert [entry[1] for entry in calls] == ["/records", "/instances", "/records/record-1"]
     assert all(entry[3] == "tenant-1" for entry in calls)
+
+
+def test_deadline_reminders_are_scoped_and_idempotent(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
+    due = (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat()
+    with main.report_db() as connection:
+        connection.execute("""
+            INSERT INTO report_assignments
+              (report_id, tenant, unit_id, due_at, assigned_at, assigned_by)
+            VALUES ('reminder-case', 'tenant-1', 'environment', ?, '2026-10-30T00:00:00+00:00', 'dispatcher-1')
+        """, (due,))
+    first = client.get("/notifications", headers=ENVIRONMENT_OPERATOR).json()
+    second = client.get("/notifications", headers=ENVIRONMENT_OPERATOR).json()
+    assert len(first) == len(second) == 1 and first[0]["kind"] == "due_soon"
+    assert client.get("/notifications", headers=REPORTS_OPERATOR).json() == []
+    assert client.get("/notifications", headers=OUTSIDER).json() == []
+    assert len(client.get("/notifications", headers=DISPATCHER).json()) == 1
+    with main.report_db() as connection:
+        connection.execute("UPDATE report_assignments SET due_at = ? WHERE report_id = 'reminder-case'",
+                           ((datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),))
+    overdue = client.get("/notifications", headers=ENVIRONMENT_OPERATOR).json()
+    assert [item["kind"] for item in overdue] == ["overdue", "due_soon"]

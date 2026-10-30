@@ -8,6 +8,7 @@ Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/ope
 - Compose a tenant-scoped data record, optional stored object, and `report-handling` workflow instance.
 - Return one domain response to the frontend instead of exposing the data/workflow APIs as its application contract.
 - Dispatch reports across units with deadlines, acceptance, progress notes, transfer requests and an audit trail. Enforce tenant, owner and assigned-unit access on every report and attachment request.
+- Store report notifications for citizens, assigned units and dispatchers, with per-user read state and idempotent deadline reminders.
 - Publish tenant-scoped news and alerts for citizen apps. Only `bulletins_operator` or `admin` can publish; all authenticated members of that tenant can read.
 - Run tenant-scoped, single-choice surveys. `surveys_operator` or `admin` can publish and close them; each account can answer once.
 
@@ -29,11 +30,15 @@ Run `python scripts/provision_roles.py` after the core smoke script to create lo
 
 The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and a note. This advances the core workflow to `assigned` and saves the routing decision in `report-routing.sqlite3` on the local persistent volume. The unit accepts, posts progress notes and resolves, or requests transfer to another unit. The coordinator reassigns or rejects the request. Reassignment revokes the old unit's access. Notes and routing events are included in the citizen-visible history, so staff must write public-facing text. The web report inbox can filter overdue cases. SQLite is for the local single-instance prototype; a multi-replica deployment needs a shared transactional database.
 
+`GET /notifications` returns the 100 latest in-app notices visible to the caller. New reports notify dispatchers; dispatch and workflow updates notify the citizen and relevant staff. Unit notices stop being visible when a report moves away from that unit. `POST /notifications/{id}/read` marks a notice read for the current account only. Listing also creates deduplicated reminders for cases due within 24 hours or already overdue. This is an in-app inbox, not an OS push service or a background scheduler; reminders are materialized when a signed-in client polls the API.
+
 ### Routes
 
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/me/capabilities` | List the caller's management features |
+| `GET` | `/notifications` | List visible in-app notices and materialize deadline reminders |
+| `POST` | `/notifications/{id}/read` | Mark a visible notice read for this account |
 | `GET` | `/reports` | List reports visible to the caller |
 | `POST` | `/reports` | Create a report (multipart form, optional photo) |
 | `GET` | `/reports/{id}` | Report and workflow history |

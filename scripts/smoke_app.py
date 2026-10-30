@@ -102,6 +102,10 @@ def main():
     require(status, 201, created)
     assert created["state"] == "submitted" and len(created["attachment_ids"]) == 1 and not created["warnings"]
     report_id = created["id"]
+    status, dispatcher_notices = send("GET", f"{GATEWAY}/api/opencity/notifications", token=dispatcher)
+    require(status, 200, dispatcher_notices)
+    assert any(item["report_id"] == report_id and item["kind"] == "new_report"
+               for item in dispatcher_notices)
     status, detail = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=citizen)
     require(status, 200, detail)
     assert detail["history"][0]["action"] == "start"
@@ -133,6 +137,14 @@ def main():
                                  {"unit_id": "infrastructure", "due_at": due, "note": "Kiểm tra chiếu sáng"})
     require(status, 200, assigned)
     assert assigned["state"] == "assigned" and assigned["assigned_unit"] == "infrastructure"
+    status, citizen_notices = send("GET", f"{GATEWAY}/api/opencity/notifications", token=citizen)
+    require(status, 200, citizen_notices)
+    notice = next(item for item in citizen_notices if item["report_id"] == report_id and item["kind"] == "assigned")
+    status, denied = send("POST", f"{GATEWAY}/api/opencity/notifications/{notice['id']}/read", token=outsider)
+    require(status, 404, denied)
+    status, marked = send("POST", f"{GATEWAY}/api/opencity/notifications/{notice['id']}/read", token=citizen)
+    require(status, 200, marked)
+    assert marked["read_at"]
     status, assigned_env = post_json(
         f"{GATEWAY}/api/opencity/reports/{environment_case['id']}/dispatch", dispatcher,
         {"unit_id": "environment", "due_at": due, "note": "Kiểm tra điểm tập kết"})
@@ -159,6 +171,9 @@ def main():
     require(status, 200, moved)
     status, denied = send("GET", route, token=reports_operator)
     require(status, 404, denied)
+    status, old_unit_notices = send("GET", f"{GATEWAY}/api/opencity/notifications", token=reports_operator)
+    require(status, 200, old_unit_notices)
+    assert report_id not in {item["report_id"] for item in old_unit_notices}
     status, accepted = send("POST", f"{route}/accept", token=environment_operator)
     require(status, 200, accepted)
     status, resolved = send("POST", f"{route}/actions/resolve", token=environment_operator)
@@ -236,7 +251,7 @@ def main():
     status, detail = send("GET", f"{GATEWAY}/api/opencity/surveys/{survey_id}", token=citizen)
     require(status, 200, detail)
     assert detail["status"] == "open" and len(detail["options"]) == 3
-    print("OpenCity smoke passed: reports, images, workflows, bulletins, surveys, roles and tenants.")
+    print("OpenCity smoke passed: reports, notifications, images, workflows, bulletins, surveys, roles and tenants.")
 
 
 if __name__ == "__main__":

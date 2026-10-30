@@ -6,7 +6,7 @@ import os
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -105,6 +105,19 @@ def report_db() -> sqlite3.Connection:
         );
         CREATE INDEX IF NOT EXISTS report_events_tenant_report
             ON report_events(tenant, report_id, created_at);
+        CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY, tenant TEXT NOT NULL, report_id TEXT NOT NULL,
+            recipient_kind TEXT NOT NULL, recipient_id TEXT NOT NULL,
+            kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
+            created_at TEXT NOT NULL, dedupe_key TEXT UNIQUE
+        );
+        CREATE INDEX IF NOT EXISTS notifications_recipient
+            ON notifications(tenant, recipient_kind, recipient_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS notification_reads (
+            notification_id TEXT NOT NULL REFERENCES notifications(id),
+            user_id TEXT NOT NULL, read_at TEXT NOT NULL,
+            PRIMARY KEY(notification_id, user_id)
+        );
     """)
     return connection
 
@@ -138,6 +151,63 @@ def add_report_event(connection: sqlite3.Connection, report_id: str, identity: "
         (str(uuid4()), report_id, identity.tenant, action, identity.user,
          from_unit, to_unit, note, datetime.now(timezone.utc).isoformat()),
     )
+
+
+def add_notification(connection: sqlite3.Connection, tenant: str, report_id: str,
+                     recipient_kind: str, recipient_id: str, kind: str, title: str,
+                     body: str, *, dedupe_key: str | None = None) -> None:
+    connection.execute("""
+        INSERT OR IGNORE INTO notifications
+          (id, tenant, report_id, recipient_kind, recipient_id, kind, title,
+           body, created_at, dedupe_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (str(uuid4()), tenant, report_id, recipient_kind, recipient_id,
+          kind, title, body, datetime.now(timezone.utc).isoformat(), dedupe_key))
+
+
+def materialize_deadline_notifications(connection: sqlite3.Connection, tenant: str) -> None:
+    now = datetime.now(timezone.utc)
+    rows = connection.execute("""
+        SELECT a.report_id, a.unit_id, a.due_at, a.assigned_at
+        FROM report_assignments a
+        WHERE a.tenant = ? AND NOT EXISTS (
+            SELECT 1 FROM report_events e WHERE e.tenant = a.tenant
+              AND e.report_id = a.report_id AND e.action = 'resolved'
+        )
+    """, (tenant,)).fetchall()
+    for row in rows:
+        due_at = datetime.fromisoformat(row["due_at"].replace("Z", "+00:00"))
+        if due_at.tzinfo is None:
+            continue
+        remaining = due_at - now
+        if remaining > timedelta(days=1):
+            continue
+        kind = "overdue" if remaining <= timedelta(0) else "due_soon"
+        title = "Hồ sơ quá hạn xử lý" if kind == "overdue" else "Hồ sơ sắp đến hạn"
+        body = ("Hãy kiểm tra và xử lý hồ sơ quá hạn." if kind == "overdue"
+                else "Hồ sơ còn dưới 24 giờ trước hạn xử lý.")
+        for recipient_kind, recipient_id in (("unit", row["unit_id"]), ("dispatcher", "reports")):
+            add_notification(connection, tenant, row["report_id"], recipient_kind,
+                             recipient_id, kind, title, body,
+                             dedupe_key=f"{tenant}:{kind}:{row['report_id']}:{row['assigned_at']}:{recipient_kind}")
+
+
+def notification_scope(identity: "Caller") -> tuple[str, list[str]]:
+    clauses = ["(n.recipient_kind = 'user' AND n.recipient_id = ?)"]
+    params = [identity.user]
+    if "reports_operator" in identity.roles and identity.unit in VALID_UNITS:
+        clauses.append("""(n.recipient_kind = 'unit' AND n.recipient_id = ?
+            AND EXISTS (SELECT 1 FROM report_assignments a
+                WHERE a.tenant = n.tenant AND a.report_id = n.report_id
+                  AND a.unit_id = n.recipient_id))""")
+        params.append(identity.unit)
+    if can_dispatch(identity):
+        clauses.append("(n.recipient_kind = 'dispatcher' AND n.recipient_id = 'reports')")
+    return " OR ".join(clauses), params
+
+
+def notification_view(row: sqlite3.Row) -> dict:
+    return {key: row[key] for key in ("id", "report_id", "kind", "title", "body", "created_at", "read_at")}
 
 
 def bulletin_db() -> sqlite3.Connection:
@@ -377,6 +447,43 @@ def my_capabilities(identity: Caller = Depends(caller)) -> dict:
     }
 
 
+@app.get("/notifications")
+def list_notifications(identity: Caller = Depends(caller)) -> list[dict]:
+    scope, params = notification_scope(identity)
+    with closing(report_db()) as connection:
+        with connection:
+            materialize_deadline_notifications(connection, identity.tenant)
+        rows = connection.execute(f"""
+            SELECT n.*, r.read_at FROM notifications n
+            LEFT JOIN notification_reads r ON r.notification_id = n.id AND r.user_id = ?
+            WHERE n.tenant = ? AND ({scope})
+            ORDER BY n.created_at DESC, n.rowid DESC LIMIT 100
+        """, (identity.user, identity.tenant, *params)).fetchall()
+    return [notification_view(row) for row in rows]
+
+
+@app.post("/notifications/{notification_id}/read")
+def read_notification(notification_id: str, identity: Caller = Depends(caller)) -> dict:
+    scope, params = notification_scope(identity)
+    with closing(report_db()) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(f"""
+                SELECT n.id FROM notifications n
+                WHERE n.id = ? AND n.tenant = ? AND ({scope})
+            """, (notification_id, identity.tenant, *params)).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Notification not found")
+            connection.execute("""
+                INSERT OR IGNORE INTO notification_reads (notification_id, user_id, read_at)
+                VALUES (?, ?, ?)
+            """, (notification_id, identity.user, datetime.now(timezone.utc).isoformat()))
+        read_at = connection.execute("""
+            SELECT read_at FROM notification_reads WHERE notification_id = ? AND user_id = ?
+        """, (notification_id, identity.user)).fetchone()["read_at"]
+    return {"id": notification_id, "read_at": read_at}
+
+
 @app.get("/bulletins")
 def list_bulletins(identity: Caller = Depends(caller)) -> list[dict]:
     with closing(bulletin_db()) as connection:
@@ -573,6 +680,11 @@ async def create_report(
             record = await core_json(DATA_URL, f"/records/{record['id']}", identity, "PATCH", json_body={"payload": payload})
         except HTTPException:
             warnings.append("Một số thông tin liên kết chưa đồng bộ.")
+    with closing(report_db()) as connection:
+        with connection:
+            add_notification(connection, identity.tenant, record["id"], "dispatcher", "reports",
+                             "new_report", "Phản ánh mới cần phân công",
+                             f"Hồ sơ #{record['id'][:8]} đang chờ chọn đơn vị xử lý.")
     return {**report_view(record, instance), "warnings": warnings}
 
 
@@ -614,6 +726,10 @@ async def take_action(report_id: str, action: str, identity: Caller = Depends(ca
     with closing(report_db()) as connection:
         with connection:
             add_report_event(connection, report_id, identity, "resolved", to_unit=routing["unit_id"])
+            add_notification(connection, identity.tenant, report_id, "user", record["created_by"],
+                             "resolved", "Phản ánh đã hoàn tất", "Đơn vị đã hoàn tất xử lý phản ánh của bạn.")
+            add_notification(connection, identity.tenant, report_id, "dispatcher", "reports",
+                             "resolved", "Hồ sơ đã hoàn tất", "Đơn vị đã hoàn tất xử lý hồ sơ.")
     return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
 
@@ -658,6 +774,12 @@ async def dispatch_report(report_id: str, body: DispatchInput, identity: Caller 
                              "reassigned" if previous else "assigned",
                              from_unit=previous["unit_id"] if previous else None,
                              to_unit=body.unit_id, note=note)
+            add_notification(connection, identity.tenant, report_id, "unit", body.unit_id,
+                             "reassigned" if previous else "assigned", "Hồ sơ được giao xử lý",
+                             f"Hồ sơ #{report_id[:8]} đã được giao cho đơn vị của bạn.")
+            add_notification(connection, identity.tenant, report_id, "user", record["created_by"],
+                             "reassigned" if previous else "assigned", "Phản ánh đã được phân công",
+                             "Phản ánh của bạn đã được chuyển đến đơn vị xử lý.")
     return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
 
@@ -686,6 +808,9 @@ async def accept_report(report_id: str, identity: Caller = Depends(caller)) -> d
                 (datetime.now(timezone.utc).isoformat(), identity.user, report_id),
             )
             add_report_event(connection, report_id, identity, "accepted", to_unit=row["unit_id"])
+            add_notification(connection, identity.tenant, report_id, "user", record["created_by"],
+                             "accepted", "Đơn vị đã nhận phản ánh",
+                             "Đơn vị được phân công đã nhận xử lý phản ánh của bạn.")
     return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
 
@@ -720,6 +845,12 @@ async def request_transfer(report_id: str, body: TransferInput, identity: Caller
             """, (body.unit_id, reason, datetime.now(timezone.utc).isoformat(), identity.user, report_id))
             add_report_event(connection, report_id, identity, "transfer_requested",
                              from_unit=row["unit_id"], to_unit=body.unit_id, note=reason)
+            add_notification(connection, identity.tenant, report_id, "dispatcher", "reports",
+                             "transfer_requested", "Đề nghị chuyển đơn vị",
+                             f"Đơn vị hiện tại đề nghị chuyển hồ sơ #{report_id[:8]}.")
+            add_notification(connection, identity.tenant, report_id, "user", record["created_by"],
+                             "transfer_requested", "Phản ánh đang được xem xét chuyển đơn vị",
+                             "Đơn vị xử lý đã đề nghị chuyển phản ánh của bạn.")
     return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
 
@@ -747,6 +878,8 @@ async def update_report_progress(report_id: str, body: NoteInput, identity: Call
             if not row["accepted_at"] or row["pending_unit"]:
                 raise HTTPException(status_code=409, detail="Accept the report before posting progress")
             add_report_event(connection, report_id, identity, "progress", to_unit=row["unit_id"], note=note)
+            add_notification(connection, identity.tenant, report_id, "user", record["created_by"],
+                             "progress", "Phản ánh có tiến độ mới", note)
     return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
 
@@ -773,6 +906,11 @@ async def reject_transfer(report_id: str, body: NoteInput, identity: Caller = De
             """, (report_id,))
             add_report_event(connection, report_id, identity, "transfer_rejected",
                              from_unit=row["unit_id"], to_unit=row["pending_unit"], note=note)
+            add_notification(connection, identity.tenant, report_id, "unit", row["unit_id"],
+                             "transfer_rejected", "Đề nghị chuyển đã bị từ chối", note)
+            add_notification(connection, identity.tenant, report_id, "user", record["created_by"],
+                             "transfer_rejected", "Phản ánh tiếp tục do đơn vị hiện tại xử lý",
+                             "Đề nghị chuyển đơn vị đã được xem xét và từ chối.")
     instance = await find_instance(report_id, identity)
     return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
