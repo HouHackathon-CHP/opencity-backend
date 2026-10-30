@@ -7,7 +7,7 @@ Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/ope
 - Validate field report data and image size/type.
 - Compose a tenant-scoped data record, optional stored object, and `report-handling` workflow instance.
 - Return one domain response to the frontend instead of exposing the data/workflow APIs as its application contract.
-- Restrict management actions by feature role and report/image access by tenant and owner. The backend delegates report management to the generic core only after checking `reports_operator`.
+- Dispatch reports across units with deadlines, acceptance, progress notes, transfer requests and an audit trail. Enforce tenant, owner and assigned-unit access on every report and attachment request.
 - Publish tenant-scoped news and alerts for citizen apps. Only `bulletins_operator` or `admin` can publish; all authenticated members of that tenant can read.
 - Run tenant-scoped, single-choice surveys. `surveys_operator` or `admin` can publish and close them; each account can answer once.
 
@@ -23,9 +23,11 @@ python scripts\smoke_app.py
 
 The first command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail.
 
-Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, and `dxos-surveys`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real report staff, assign the `reports_operator` realm role and an admin-managed `unit_id` attribute. The supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all three features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
+Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, and `dxos-surveys`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all three features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
 
-`GET /me/capabilities` returns the authenticated caller's management features and report unit. Public news and surveys remain readable by authenticated citizens. Report lists contain the caller's own cases or, for `reports_operator`, cases routed to that unit in the caller's tenant. Categories route as follows: `Hạ tầng`/`Chiếu sáng` → `infrastructure`; `Môi trường`/`Cây xanh` → `environment`; `Giao thông` → `transport`; `Khác` → `intake`. This deterministic mapping also covers reports created before the unit claim was introduced. The backend checks unit scope again on details, attachments, workflow retry, and actions. The web hides unauthorized staff routes, while API checks remain authoritative.
+`GET /me/capabilities` returns management features, report unit and dispatcher capability. Citizens see their own reports; dispatchers see all reports in their tenant; unit handlers see only reports explicitly assigned to their unit. The category suggests an initial unit (`Hạ tầng`/`Chiếu sáng` → `infrastructure`; `Môi trường`/`Cây xanh` → `environment`; `Giao thông` → `transport`; `Khác` → `intake`), but does not grant that unit access. Existing reports without a saved assignment appear in the dispatcher inbox until dispatched. The backend checks unit scope again on details, attachments, workflow retry and actions. The web hides unauthorized routes, while API checks remain authoritative.
+
+The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and a note. This advances the core workflow to `assigned` and saves the routing decision in `report-routing.sqlite3` on the local persistent volume. The unit accepts, posts progress notes and resolves, or requests transfer to another unit. The coordinator reassigns or rejects the request. Reassignment revokes the old unit's access. Notes and routing events are included in the citizen-visible history, so staff must write public-facing text. The web report inbox can filter overdue cases. SQLite is for the local single-instance prototype; a multi-replica deployment needs a shared transactional database.
 
 ### Routes
 
@@ -35,7 +37,12 @@ Run `python scripts/provision_roles.py` after the core smoke script to create lo
 | `GET` | `/reports` | List reports visible to the caller |
 | `POST` | `/reports` | Create a report (multipart form, optional photo) |
 | `GET` | `/reports/{id}` | Report and workflow history |
-| `POST` | `/reports/{id}/actions/{action}` | `reports_operator` transition: triage, assign, resolve |
+| `POST` | `/reports/{id}/dispatch` | Coordinator assigns/reassigns unit and deadline |
+| `POST` | `/reports/{id}/accept` | Assigned unit accepts work |
+| `POST` | `/reports/{id}/progress` | Accepted unit posts a public progress note |
+| `POST` | `/reports/{id}/transfer-request` | Assigned unit requests another unit |
+| `POST` | `/reports/{id}/transfer-request/reject` | Coordinator rejects transfer with a reason |
+| `POST` | `/reports/{id}/actions/resolve` | Accepted unit completes the report |
 | `POST` | `/reports/{id}/retry-workflow` | Recover a saved record without a workflow |
 | `GET` | `/reports/{id}/attachments/{object_id}` | Download a report's permitted image |
 | `GET` | `/bulletins`, `/bulletins/{id}` | Read tenant-scoped news and alerts |

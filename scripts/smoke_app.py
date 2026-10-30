@@ -3,6 +3,7 @@
 
 import base64
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -64,10 +65,15 @@ def require(actual, expected, result):
     return result
 
 
+def post_json(url, auth, payload):
+    return send("POST", url, token=auth, body=json.dumps(payload).encode(), content_type="application/json")
+
+
 def main():
     provision()
     values = env_values()
     citizen = token("dxos-citizen", values["DEMO_CITIZEN_PASSWORD"])
+    dispatcher = token("dxos-dispatcher", values["DEMO_OPERATOR_PASSWORD"])
     reports_operator = token("dxos-reports", values["DEMO_OPERATOR_PASSWORD"])
     environment_operator = token("dxos-reports-environment", values["DEMO_OPERATOR_PASSWORD"])
     bulletins_operator = token("dxos-bulletins", values["DEMO_OPERATOR_PASSWORD"])
@@ -75,14 +81,16 @@ def main():
     outsider = token("dxos-outsider", values["DEMO_OUTSIDER_PASSWORD"])
     status, result = send("GET", f"{GATEWAY}/api/opencity/reports")
     require(status, 401, result)  # no token
-    for user_token, expected, unit in ((reports_operator, ["reports"], "infrastructure"),
-                                       (environment_operator, ["reports"], "environment"),
-                                       (bulletins_operator, ["bulletins"], None),
-                                       (surveys_operator, ["surveys"], None)):
+    for user_token, expected, unit, dispatch in ((dispatcher, ["reports"], None, True),
+                                                 (reports_operator, ["reports"], "infrastructure", False),
+                                                 (environment_operator, ["reports"], "environment", False),
+                                                 (bulletins_operator, ["bulletins"], None, False),
+                                                 (surveys_operator, ["surveys"], None, False)):
         status, capabilities = send("GET", f"{GATEWAY}/api/opencity/me/capabilities", token=user_token)
         require(status, 200, capabilities)
         assert capabilities["management"] == expected
         assert capabilities["report_unit"] == unit
+        assert capabilities["report_dispatcher"] is dispatch
     png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9xVzgAAAAASUVORK5CYII=")
     body, content_type = multipart({
         "title": "Đèn đường hỏng ở ngõ thử nghiệm",
@@ -100,14 +108,8 @@ def main():
     status, photo_content = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}/attachments/{created['attachment_ids'][0]}", token=citizen)
     require(status, 200, photo_content)
     assert photo_content == png
-    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/triage", token=citizen)
-    require(status, 403, result)
-    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/triage", token=bulletins_operator)
-    require(status, 403, result)
-    status, result = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=environment_operator)
-    require(status, 404, result)
-    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/triage", token=environment_operator)
-    require(status, 404, result)
+    status, result = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=reports_operator)
+    require(status, 404, result)  # New reports enter the dispatcher inbox first.
     environment_body, environment_type = multipart({
         "title": "Rác thải tồn đọng tại điểm thử nghiệm",
         "description": "Điểm tập kết cần được kiểm tra và xử lý trong môi trường thử nghiệm.",
@@ -118,16 +120,50 @@ def main():
     require(status, 201, environment_case)
     status, infra_list = send("GET", f"{GATEWAY}/api/opencity/reports", token=reports_operator)
     require(status, 200, infra_list)
-    assert environment_case["id"] not in {item["id"] for item in infra_list}
+    assert report_id not in {item["id"] for item in infra_list}
     status, env_list = send("GET", f"{GATEWAY}/api/opencity/reports", token=environment_operator)
     require(status, 200, env_list)
-    assert environment_case["id"] in {item["id"] for item in env_list}
-    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{environment_case['id']}/actions/triage",
-                          token=reports_operator)
-    require(status, 404, result)
-    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{environment_case['id']}/actions/triage",
-                          token=environment_operator)
-    require(status, 200, result)
+    assert environment_case["id"] not in {item["id"] for item in env_list}
+    due = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+    route = f"{GATEWAY}/api/opencity/reports/{report_id}"
+    status, denied = post_json(f"{route}/dispatch", reports_operator,
+                               {"unit_id": "infrastructure", "due_at": due, "note": "Kiểm tra chiếu sáng"})
+    require(status, 403, denied)
+    status, assigned = post_json(f"{route}/dispatch", dispatcher,
+                                 {"unit_id": "infrastructure", "due_at": due, "note": "Kiểm tra chiếu sáng"})
+    require(status, 200, assigned)
+    assert assigned["state"] == "assigned" and assigned["assigned_unit"] == "infrastructure"
+    status, assigned_env = post_json(
+        f"{GATEWAY}/api/opencity/reports/{environment_case['id']}/dispatch", dispatcher,
+        {"unit_id": "environment", "due_at": due, "note": "Kiểm tra điểm tập kết"})
+    require(status, 200, assigned_env)
+    status, infra_list = send("GET", f"{GATEWAY}/api/opencity/reports", token=reports_operator)
+    require(status, 200, infra_list)
+    assert report_id in {item["id"] for item in infra_list} and environment_case["id"] not in {item["id"] for item in infra_list}
+    status, env_list = send("GET", f"{GATEWAY}/api/opencity/reports", token=environment_operator)
+    require(status, 200, env_list)
+    assert environment_case["id"] in {item["id"] for item in env_list} and report_id not in {item["id"] for item in env_list}
+    status, denied = send("POST", f"{route}/actions/resolve", token=reports_operator)
+    require(status, 409, denied)  # The unit must accept its assignment.
+    status, accepted = send("POST", f"{route}/accept", token=reports_operator)
+    require(status, 200, accepted)
+    status, progress = post_json(f"{route}/progress", reports_operator,
+                                 {"note": "Đã kiểm tra tủ điện tại hiện trường"})
+    require(status, 200, progress)
+    status, requested = post_json(f"{route}/transfer-request", reports_operator,
+                                  {"unit_id": "environment", "reason": "Cần xử lý liên đơn vị"})
+    require(status, 200, requested)
+    assert requested["pending_unit"] == "environment"
+    status, moved = post_json(f"{route}/dispatch", dispatcher,
+                              {"unit_id": "environment", "due_at": due, "note": "Duyệt chuyển đơn vị"})
+    require(status, 200, moved)
+    status, denied = send("GET", route, token=reports_operator)
+    require(status, 404, denied)
+    status, accepted = send("POST", f"{route}/accept", token=environment_operator)
+    require(status, 200, accepted)
+    status, resolved = send("POST", f"{route}/actions/resolve", token=environment_operator)
+    require(status, 200, resolved)
+    assert resolved["state"] == "resolved"
     status, result = send("GET", f"{GATEWAY}/api/data/records", token=reports_operator)
     require(status, 200, result)
     assert report_id not in {item["id"] for item in result}
@@ -136,13 +172,11 @@ def main():
     status, other_list = send("GET", f"{GATEWAY}/api/opencity/reports", token=outsider)
     require(status, 200, other_list)
     assert report_id not in {item["id"] for item in other_list}
-    for action, expected_state in [("triage", "triaged"), ("assign", "assigned"), ("resolve", "resolved")]:
-        status, changed = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/{action}", token=reports_operator)
-        require(status, 200, changed)
-        assert changed["state"] == expected_state
     status, finished = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=citizen)
     require(status, 200, finished)
-    assert finished["state"] == "resolved" and len(finished["history"]) == 4
+    assert finished["state"] == "resolved"
+    assert {"assigned", "accepted", "progress", "transfer_requested", "reassigned", "resolved"} <= {
+        item["action"] for item in finished["history"]}
     status, bulletins = send("GET", f"{GATEWAY}/api/opencity/bulletins", token=citizen)
     require(status, 200, bulletins)
     sample_title = "[DEMO] Cảnh báo thử nghiệm khu vực trung tâm"

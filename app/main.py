@@ -28,7 +28,6 @@ REPORT_UNITS = {
     "Môi trường": "environment", "Cây xanh": "environment",
     "Giao thông": "transport", "Khác": "intake",
 }
-ACTIONS = {"triage", "assign", "resolve"}
 MANAGEMENT_ROLES = {
     "reports": "reports_operator",
     "bulletins": "bulletins_operator",
@@ -36,6 +35,8 @@ MANAGEMENT_ROLES = {
 }
 NEWS_DB_PATH = os.getenv("NEWS_DB_PATH", "data/bulletins.sqlite3")
 SURVEY_DB_PATH = os.getenv("SURVEY_DB_PATH", "data/surveys.sqlite3")
+REPORT_DB_PATH = os.getenv("REPORT_DB_PATH", "data/report-routing.sqlite3")
+VALID_UNITS = frozenset(REPORT_UNITS.values())
 
 
 def matches_image_type(content: bytes, claimed_type: str) -> bool:
@@ -66,6 +67,77 @@ class SurveyInput(BaseModel):
 
 class SurveyAnswer(BaseModel):
     option_id: str
+
+
+class DispatchInput(BaseModel):
+    unit_id: Literal["infrastructure", "environment", "transport", "intake"]
+    due_at: datetime
+    note: str = Field(min_length=3, max_length=500)
+
+
+class TransferInput(BaseModel):
+    unit_id: Literal["infrastructure", "environment", "transport", "intake"]
+    reason: str = Field(min_length=5, max_length=500)
+
+
+class NoteInput(BaseModel):
+    note: str = Field(min_length=3, max_length=500)
+
+
+def report_db() -> sqlite3.Connection:
+    path = Path(REPORT_DB_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path, timeout=10)
+    connection.row_factory = sqlite3.Row
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS report_assignments (
+            report_id TEXT PRIMARY KEY, tenant TEXT NOT NULL, unit_id TEXT NOT NULL,
+            due_at TEXT NOT NULL, assigned_at TEXT NOT NULL, assigned_by TEXT NOT NULL,
+            accepted_at TEXT, accepted_by TEXT, pending_unit TEXT,
+            pending_reason TEXT, requested_at TEXT, requested_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS report_assignments_tenant_unit
+            ON report_assignments(tenant, unit_id);
+        CREATE TABLE IF NOT EXISTS report_events (
+            id TEXT PRIMARY KEY, report_id TEXT NOT NULL, tenant TEXT NOT NULL,
+            action TEXT NOT NULL, actor TEXT NOT NULL, from_unit TEXT,
+            to_unit TEXT, note TEXT, created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS report_events_tenant_report
+            ON report_events(tenant, report_id, created_at);
+    """)
+    return connection
+
+
+def routing_map(tenant: str) -> dict[str, dict]:
+    with closing(report_db()) as connection:
+        rows = connection.execute(
+            "SELECT * FROM report_assignments WHERE tenant = ?", (tenant,)
+        ).fetchall()
+        events = connection.execute(
+            "SELECT * FROM report_events WHERE tenant = ? ORDER BY created_at, rowid", (tenant,)
+        ).fetchall()
+    result = {row["report_id"]: {**dict(row), "events": []} for row in rows}
+    for event in events:
+        if event["report_id"] in result:
+            result[event["report_id"]]["events"].append(dict(event))
+    return result
+
+
+def routing_for(report_id: str, tenant: str) -> dict | None:
+    return routing_map(tenant).get(report_id)
+
+
+def add_report_event(connection: sqlite3.Connection, report_id: str, identity: "Caller",
+                     action: str, *, from_unit: str | None = None,
+                     to_unit: str | None = None, note: str | None = None) -> None:
+    connection.execute(
+        """INSERT INTO report_events
+           (id, report_id, tenant, action, actor, from_unit, to_unit, note, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(uuid4()), report_id, identity.tenant, action, identity.user,
+         from_unit, to_unit, note, datetime.now(timezone.utc).isoformat()),
+    )
 
 
 def bulletin_db() -> sqlite3.Connection:
@@ -158,9 +230,15 @@ class Caller:
 def can_manage(identity: Caller, feature: str) -> bool:
     if "admin" in identity.roles:
         return True
+    if feature == "reports" and "reports_dispatcher" in identity.roles:
+        return True
     if MANAGEMENT_ROLES[feature] not in identity.roles:
         return False
-    return feature != "reports" or identity.unit in REPORT_UNITS.values()
+    return feature != "reports" or identity.unit in VALID_UNITS
+
+
+def can_dispatch(identity: Caller) -> bool:
+    return "admin" in identity.roles or "reports_dispatcher" in identity.roles
 
 
 def require_manager(identity: Caller, feature: str) -> None:
@@ -224,12 +302,27 @@ async def core_json(base: str, path: str, identity: Caller, method: str = "GET",
 
 
 def report_view(record: dict, instance: dict | None = None) -> dict:
+    return report_view_with_routing(record, instance, None)
+
+
+def report_view_with_routing(record: dict, instance: dict | None, routing: dict | None) -> dict:
+    workflow_history = instance.get("history", []) if instance else []
+    routing_history = [{
+        "action": event["action"], "actor": event["actor"],
+        "created_at": event["created_at"], "from_state": None, "to_state": None,
+        "from_unit": event["from_unit"], "to_unit": event["to_unit"], "note": event["note"],
+    } for event in (routing or {}).get("events", [])]
     return {
         "id": record["id"],
         "title": record["payload"].get("title", ""),
         "description": record["payload"].get("description", ""),
         "category": record["payload"].get("category", ""),
         "unit_id": report_unit(record),
+        "assigned_unit": routing["unit_id"] if routing else None,
+        "due_at": routing["due_at"] if routing else None,
+        "accepted_at": routing["accepted_at"] if routing else None,
+        "pending_unit": routing["pending_unit"] if routing else None,
+        "pending_reason": routing["pending_reason"] if routing else None,
         "address": record["payload"].get("address", ""),
         "latitude": record["payload"].get("latitude"),
         "longitude": record["payload"].get("longitude"),
@@ -239,7 +332,7 @@ def report_view(record: dict, instance: dict | None = None) -> dict:
         "updated_at": record["updated_at"],
         "workflow_id": instance["id"] if instance else None,
         "state": instance["state"] if instance else None,
-        "history": instance.get("history", []) if instance else [],
+        "history": sorted([*workflow_history, *routing_history], key=lambda event: event["created_at"]),
     }
 
 
@@ -248,17 +341,19 @@ def report_unit(record: dict) -> str:
     return REPORT_UNITS.get(record["payload"].get("category"), "intake")
 
 
-def report_visible(record: dict, identity: Caller) -> bool:
-    if "admin" in identity.roles:
+def report_visible(record: dict, identity: Caller, routing: dict | None = None) -> bool:
+    if can_dispatch(identity):
         return True
-    if can_manage(identity, "reports"):
-        return identity.unit == report_unit(record)
+    if "reports_operator" in identity.roles and identity.unit in VALID_UNITS:
+        return bool(routing and routing["unit_id"] == identity.unit)
     return record["created_by"] == identity.user
 
 
 async def get_report_record(report_id: str, identity: Caller) -> dict:
     record = await core_json(DATA_URL, f"/records/{report_id}", identity)
-    if record.get("kind") != "field-report" or not report_visible(record, identity):
+    if record.get("kind") != "field-report" or not report_visible(
+        record, identity, routing_for(report_id, identity.tenant)
+    ):
         raise HTTPException(status_code=404, detail="Report not found")
     return record
 
@@ -278,6 +373,7 @@ def my_capabilities(identity: Caller = Depends(caller)) -> dict:
     return {
         "management": [feature for feature in MANAGEMENT_ROLES if can_manage(identity, feature)],
         "report_unit": identity.unit if can_manage(identity, "reports") and "admin" not in identity.roles else None,
+        "report_dispatcher": can_dispatch(identity),
     }
 
 
@@ -412,8 +508,10 @@ async def list_reports(identity: Caller = Depends(caller)) -> list[dict]:
     records = await core_json(DATA_URL, "/records", identity)
     instances = await core_json(WORKFLOW_URL, "/instances", identity)
     by_record = {item["reference_id"]: item for item in instances if item["definition_key"] == "report-handling"}
-    return [report_view(item, by_record.get(item["id"])) for item in records
-            if item["kind"] == "field-report" and report_visible(item, identity)]
+    routing = routing_map(identity.tenant)
+    return [report_view_with_routing(item, by_record.get(item["id"]), routing.get(item["id"]))
+            for item in records if item["kind"] == "field-report"
+            and report_visible(item, identity, routing.get(item["id"]))]
 
 
 @app.post("/reports", status_code=201)
@@ -484,7 +582,7 @@ async def get_report(report_id: str, identity: Caller = Depends(caller)) -> dict
     instance = await find_instance(report_id, identity)
     if instance:
         instance = await core_json(WORKFLOW_URL, f"/instances/{instance['id']}", identity)
-    return report_view(record, instance)
+    return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
 
 @app.post("/reports/{report_id}/retry-workflow")
@@ -493,20 +591,190 @@ async def retry_workflow(report_id: str, identity: Caller = Depends(caller)) -> 
     instance = await find_instance(report_id, identity)
     if instance is None:
         instance = await core_json(WORKFLOW_URL, "/instances", identity, "POST", json_body={"definition_key": "report-handling", "reference_id": report_id})
-    return report_view(record, instance)
+    return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
 
 @app.post("/reports/{report_id}/actions/{action}")
 async def take_action(report_id: str, action: str, identity: Caller = Depends(caller)) -> dict:
     require_manager(identity, "reports")
-    if action not in ACTIONS:
+    if action != "resolve":
         raise HTTPException(status_code=404, detail="Unknown action")
+    record = await get_report_record(report_id, identity)
+    routing = routing_for(report_id, identity.tenant)
+    if not routing or not routing["accepted_at"] or routing["pending_unit"]:
+        raise HTTPException(status_code=409, detail="Report must be accepted by its assigned unit")
+    if "admin" not in identity.roles and not (
+        "reports_operator" in identity.roles and identity.unit == routing["unit_id"]
+    ):
+        raise HTTPException(status_code=403, detail="Assigned unit role required")
+    instance = await find_instance(report_id, identity)
+    if instance is None or instance["state"] != "assigned":
+        raise HTTPException(status_code=409, detail="Report is not ready to resolve")
+    instance = await core_json(WORKFLOW_URL, f"/instances/{instance['id']}/actions/{action}", identity, "POST")
+    with closing(report_db()) as connection:
+        with connection:
+            add_report_event(connection, report_id, identity, "resolved", to_unit=routing["unit_id"])
+    return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
+
+
+@app.post("/reports/{report_id}/dispatch")
+async def dispatch_report(report_id: str, body: DispatchInput, identity: Caller = Depends(caller)) -> dict:
+    if not can_dispatch(identity):
+        raise HTTPException(status_code=403, detail="reports_dispatcher role required")
+    if body.due_at.tzinfo is None or body.due_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=422, detail="Due date must be in the future with a timezone")
+    note = body.note.strip()
+    if len(note) < 3:
+        raise HTTPException(status_code=422, detail="Dispatch note is required")
     record = await get_report_record(report_id, identity)
     instance = await find_instance(report_id, identity)
     if instance is None:
         raise HTTPException(status_code=409, detail="Report workflow has not started")
-    instance = await core_json(WORKFLOW_URL, f"/instances/{instance['id']}/actions/{action}", identity, "POST")
-    return report_view(record, instance)
+    if instance["state"] == "resolved":
+        raise HTTPException(status_code=409, detail="Resolved reports cannot be reassigned")
+    if instance["state"] == "submitted":
+        instance = await core_json(WORKFLOW_URL, f"/instances/{instance['id']}/actions/triage", identity, "POST")
+    if instance["state"] == "triaged":
+        instance = await core_json(WORKFLOW_URL, f"/instances/{instance['id']}/actions/assign", identity, "POST")
+    now = datetime.now(timezone.utc).isoformat()
+    with closing(report_db()) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute(
+                "SELECT unit_id FROM report_assignments WHERE report_id = ? AND tenant = ?",
+                (report_id, identity.tenant),
+            ).fetchone()
+            connection.execute("""
+                INSERT INTO report_assignments
+                  (report_id, tenant, unit_id, due_at, assigned_at, assigned_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(report_id) DO UPDATE SET
+                  unit_id = excluded.unit_id, due_at = excluded.due_at,
+                  assigned_at = excluded.assigned_at, assigned_by = excluded.assigned_by,
+                  accepted_at = NULL, accepted_by = NULL, pending_unit = NULL,
+                  pending_reason = NULL, requested_at = NULL, requested_by = NULL
+            """, (report_id, identity.tenant, body.unit_id, body.due_at.isoformat(), now, identity.user))
+            add_report_event(connection, report_id, identity,
+                             "reassigned" if previous else "assigned",
+                             from_unit=previous["unit_id"] if previous else None,
+                             to_unit=body.unit_id, note=note)
+    return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
+
+
+@app.post("/reports/{report_id}/accept")
+async def accept_report(report_id: str, identity: Caller = Depends(caller)) -> dict:
+    require_manager(identity, "reports")
+    if can_dispatch(identity) and "reports_operator" not in identity.roles and "admin" not in identity.roles:
+        raise HTTPException(status_code=403, detail="Assigned unit role required")
+    record = await get_report_record(report_id, identity)
+    instance = await find_instance(report_id, identity)
+    if instance is None or instance["state"] != "assigned":
+        raise HTTPException(status_code=409, detail="Report is not assigned")
+    with closing(report_db()) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM report_assignments WHERE report_id = ? AND tenant = ?",
+                (report_id, identity.tenant),
+            ).fetchone()
+            if row is None or ("admin" not in identity.roles and row["unit_id"] != identity.unit):
+                raise HTTPException(status_code=404, detail="Report not assigned to this unit")
+            if row["accepted_at"]:
+                raise HTTPException(status_code=409, detail="Report already accepted")
+            connection.execute(
+                "UPDATE report_assignments SET accepted_at = ?, accepted_by = ? WHERE report_id = ?",
+                (datetime.now(timezone.utc).isoformat(), identity.user, report_id),
+            )
+            add_report_event(connection, report_id, identity, "accepted", to_unit=row["unit_id"])
+    return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
+
+
+@app.post("/reports/{report_id}/transfer-request")
+async def request_transfer(report_id: str, body: TransferInput, identity: Caller = Depends(caller)) -> dict:
+    require_manager(identity, "reports")
+    if can_dispatch(identity) and "reports_operator" not in identity.roles and "admin" not in identity.roles:
+        raise HTTPException(status_code=403, detail="Assigned unit role required")
+    record = await get_report_record(report_id, identity)
+    instance = await find_instance(report_id, identity)
+    if instance is None or instance["state"] != "assigned":
+        raise HTTPException(status_code=409, detail="Report is not assigned")
+    reason = body.reason.strip()
+    if len(reason) < 5:
+        raise HTTPException(status_code=422, detail="Transfer reason is required")
+    with closing(report_db()) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM report_assignments WHERE report_id = ? AND tenant = ?",
+                (report_id, identity.tenant),
+            ).fetchone()
+            if row is None or ("admin" not in identity.roles and row["unit_id"] != identity.unit):
+                raise HTTPException(status_code=404, detail="Report not assigned to this unit")
+            if body.unit_id == row["unit_id"]:
+                raise HTTPException(status_code=422, detail="Choose another unit")
+            if row["pending_unit"]:
+                raise HTTPException(status_code=409, detail="Transfer request already pending")
+            connection.execute("""
+                UPDATE report_assignments SET pending_unit = ?, pending_reason = ?,
+                  requested_at = ?, requested_by = ? WHERE report_id = ?
+            """, (body.unit_id, reason, datetime.now(timezone.utc).isoformat(), identity.user, report_id))
+            add_report_event(connection, report_id, identity, "transfer_requested",
+                             from_unit=row["unit_id"], to_unit=body.unit_id, note=reason)
+    return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
+
+
+@app.post("/reports/{report_id}/progress")
+async def update_report_progress(report_id: str, body: NoteInput, identity: Caller = Depends(caller)) -> dict:
+    require_manager(identity, "reports")
+    record = await get_report_record(report_id, identity)
+    instance = await find_instance(report_id, identity)
+    if instance is None or instance["state"] != "assigned":
+        raise HTTPException(status_code=409, detail="Report is not being handled")
+    note = body.note.strip()
+    if len(note) < 3:
+        raise HTTPException(status_code=422, detail="Progress note is required")
+    with closing(report_db()) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM report_assignments WHERE report_id = ? AND tenant = ?",
+                (report_id, identity.tenant),
+            ).fetchone()
+            if row is None or ("admin" not in identity.roles and (
+                "reports_operator" not in identity.roles or row["unit_id"] != identity.unit
+            )):
+                raise HTTPException(status_code=404, detail="Report not assigned to this unit")
+            if not row["accepted_at"] or row["pending_unit"]:
+                raise HTTPException(status_code=409, detail="Accept the report before posting progress")
+            add_report_event(connection, report_id, identity, "progress", to_unit=row["unit_id"], note=note)
+    return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
+
+
+@app.post("/reports/{report_id}/transfer-request/reject")
+async def reject_transfer(report_id: str, body: NoteInput, identity: Caller = Depends(caller)) -> dict:
+    if not can_dispatch(identity):
+        raise HTTPException(status_code=403, detail="reports_dispatcher role required")
+    record = await get_report_record(report_id, identity)
+    note = body.note.strip()
+    if len(note) < 3:
+        raise HTTPException(status_code=422, detail="Reason is required")
+    with closing(report_db()) as connection:
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM report_assignments WHERE report_id = ? AND tenant = ?",
+                (report_id, identity.tenant),
+            ).fetchone()
+            if row is None or not row["pending_unit"]:
+                raise HTTPException(status_code=409, detail="No transfer request pending")
+            connection.execute("""
+                UPDATE report_assignments SET pending_unit = NULL, pending_reason = NULL,
+                  requested_at = NULL, requested_by = NULL WHERE report_id = ?
+            """, (report_id,))
+            add_report_event(connection, report_id, identity, "transfer_rejected",
+                             from_unit=row["unit_id"], to_unit=row["pending_unit"], note=note)
+    instance = await find_instance(report_id, identity)
+    return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
 
 @app.get("/reports/{report_id}/attachments/{object_id}")

@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[2]
 IDENTITY = "http://localhost:8081"
 ROLES = {
+    "dxos-dispatcher": "reports_dispatcher",
     "dxos-reports": "reports_operator",
     "dxos-reports-environment": "reports_operator",
     "dxos-bulletins": "bulletins_operator",

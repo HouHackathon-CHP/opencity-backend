@@ -15,6 +15,7 @@ services:
       INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:?Create .env from dxos-core/.env.example}
       NEWS_DB_PATH: /service/data/bulletins.sqlite3
       SURVEY_DB_PATH: /service/data/surveys.sqlite3
+      REPORT_DB_PATH: /service/data/report-routing.sqlite3
     depends_on:
       - data
       - workflow
