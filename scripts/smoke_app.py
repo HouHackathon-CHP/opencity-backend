@@ -69,17 +69,20 @@ def main():
     values = env_values()
     citizen = token("dxos-citizen", values["DEMO_CITIZEN_PASSWORD"])
     reports_operator = token("dxos-reports", values["DEMO_OPERATOR_PASSWORD"])
+    environment_operator = token("dxos-reports-environment", values["DEMO_OPERATOR_PASSWORD"])
     bulletins_operator = token("dxos-bulletins", values["DEMO_OPERATOR_PASSWORD"])
     surveys_operator = token("dxos-surveys", values["DEMO_OPERATOR_PASSWORD"])
     outsider = token("dxos-outsider", values["DEMO_OUTSIDER_PASSWORD"])
     status, result = send("GET", f"{GATEWAY}/api/opencity/reports")
     require(status, 401, result)  # no token
-    for user_token, expected in ((reports_operator, ["reports"]),
-                                 (bulletins_operator, ["bulletins"]),
-                                 (surveys_operator, ["surveys"])):
+    for user_token, expected, unit in ((reports_operator, ["reports"], "infrastructure"),
+                                       (environment_operator, ["reports"], "environment"),
+                                       (bulletins_operator, ["bulletins"], None),
+                                       (surveys_operator, ["surveys"], None)):
         status, capabilities = send("GET", f"{GATEWAY}/api/opencity/me/capabilities", token=user_token)
         require(status, 200, capabilities)
         assert capabilities["management"] == expected
+        assert capabilities["report_unit"] == unit
     png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9xVzgAAAAASUVORK5CYII=")
     body, content_type = multipart({
         "title": "Đèn đường hỏng ở ngõ thử nghiệm",
@@ -101,6 +104,30 @@ def main():
     require(status, 403, result)
     status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/triage", token=bulletins_operator)
     require(status, 403, result)
+    status, result = send("GET", f"{GATEWAY}/api/opencity/reports/{report_id}", token=environment_operator)
+    require(status, 404, result)
+    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{report_id}/actions/triage", token=environment_operator)
+    require(status, 404, result)
+    environment_body, environment_type = multipart({
+        "title": "Rác thải tồn đọng tại điểm thử nghiệm",
+        "description": "Điểm tập kết cần được kiểm tra và xử lý trong môi trường thử nghiệm.",
+        "category": "Môi trường", "address": "Khu thử nghiệm số 2",
+    }, png)
+    status, environment_case = send("POST", f"{GATEWAY}/api/opencity/reports", token=citizen,
+                                    body=environment_body, content_type=environment_type)
+    require(status, 201, environment_case)
+    status, infra_list = send("GET", f"{GATEWAY}/api/opencity/reports", token=reports_operator)
+    require(status, 200, infra_list)
+    assert environment_case["id"] not in {item["id"] for item in infra_list}
+    status, env_list = send("GET", f"{GATEWAY}/api/opencity/reports", token=environment_operator)
+    require(status, 200, env_list)
+    assert environment_case["id"] in {item["id"] for item in env_list}
+    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{environment_case['id']}/actions/triage",
+                          token=reports_operator)
+    require(status, 404, result)
+    status, result = send("POST", f"{GATEWAY}/api/opencity/reports/{environment_case['id']}/actions/triage",
+                          token=environment_operator)
+    require(status, 200, result)
     status, result = send("GET", f"{GATEWAY}/api/data/records", token=reports_operator)
     require(status, 200, result)
     assert report_id not in {item["id"] for item in result}

@@ -12,8 +12,13 @@ ROOT = Path(__file__).resolve().parents[2]
 IDENTITY = "http://localhost:8081"
 ROLES = {
     "dxos-reports": "reports_operator",
+    "dxos-reports-environment": "reports_operator",
     "dxos-bulletins": "bulletins_operator",
     "dxos-surveys": "surveys_operator",
+}
+REPORT_UNITS = {
+    "dxos-reports": "infrastructure",
+    "dxos-reports-environment": "environment",
 }
 
 
@@ -72,6 +77,34 @@ def provision() -> None:
         return status, result
 
     base = f"{IDENTITY}/admin/realms/dxos"
+    status, profile = authorized("GET", f"{base}/users/profile")
+    require(status, 200, profile)
+    if not any(item["name"] == "unit_id" for item in profile["attributes"]):
+        profile["attributes"].append({
+            "name": "unit_id", "displayName": "Organizational unit",
+            "permissions": {"view": ["admin", "user"], "edit": ["admin"]},
+        })
+        status, detail = authorized("PUT", f"{base}/users/profile", body=profile)
+        require(status, 200, detail)
+    for client_name in ("dxos-cli", "dxos-web", "dxos-mobile"):
+        status, clients = authorized("GET", f"{base}/clients?clientId={client_name}")
+        require(status, 200, clients)
+        if len(clients) != 1:
+            raise RuntimeError(f"Expected one {client_name} client")
+        mapper_url = f"{base}/clients/{clients[0]['id']}/protocol-mappers/models"
+        status, mappers = authorized("GET", mapper_url)
+        require(status, 200, mappers)
+        if not any(item["name"] == "dxos-unit-id" for item in mappers):
+            status, detail = authorized("POST", mapper_url, body={
+                "name": "dxos-unit-id", "protocol": "openid-connect",
+                "protocolMapper": "oidc-usermodel-attribute-mapper", "consentRequired": False,
+                "config": {
+                    "user.attribute": "unit_id", "claim.name": "unit_id",
+                    "jsonType.label": "String", "access.token.claim": "true",
+                    "id.token.claim": "false", "userinfo.token.claim": "false",
+                },
+            })
+            require(status, 201, detail)
     for username, role in ROLES.items():
         status, existing = authorized("GET", f"{base}/roles/{role}")
         if status == 404:
@@ -85,11 +118,14 @@ def provision() -> None:
         url = f"{base}/users?{urlencode({'username': username, 'exact': 'true'})}"
         status, users = authorized("GET", url)
         require(status, 200, users)
+        attributes = {"tenant_id": ["demo"]}
+        if username in REPORT_UNITS:
+            attributes["unit_id"] = [REPORT_UNITS[username]]
         if not users:
             status, detail = authorized("POST", f"{base}/users", body={
                 "username": username, "enabled": True, "firstName": "OpenCity",
                 "lastName": role, "email": f"{username}@example.invalid", "emailVerified": True,
-                "attributes": {"tenant_id": ["demo"]},
+                "attributes": attributes,
             })
             require(status, 201, detail)
             status, users = authorized("GET", url)
@@ -98,7 +134,7 @@ def provision() -> None:
         status, detail = authorized("PUT", f"{base}/users/{user_id}", body={
             "username": username, "enabled": True, "firstName": "OpenCity",
             "lastName": role, "email": f"{username}@example.invalid", "emailVerified": True,
-            "requiredActions": [], "attributes": {"tenant_id": ["demo"]},
+            "requiredActions": [], "attributes": attributes,
         })
         require(status, 204, detail)
         status, detail = authorized("PUT", f"{base}/users/{user_id}/reset-password", body={

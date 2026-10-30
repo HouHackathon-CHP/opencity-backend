@@ -23,6 +23,11 @@ WORKFLOW_URL = os.getenv("WORKFLOW_URL", "http://workflow:8000")
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 REPORT_CATEGORIES = {"Hạ tầng", "Môi trường", "Giao thông", "Chiếu sáng", "Cây xanh", "Khác"}
+REPORT_UNITS = {
+    "Hạ tầng": "infrastructure", "Chiếu sáng": "infrastructure",
+    "Môi trường": "environment", "Cây xanh": "environment",
+    "Giao thông": "transport", "Khác": "intake",
+}
 ACTIONS = {"triage", "assign", "resolve"}
 MANAGEMENT_ROLES = {
     "reports": "reports_operator",
@@ -147,10 +152,15 @@ class Caller:
     user: str
     tenant: str
     roles: frozenset[str]
+    unit: str | None = None
 
 
 def can_manage(identity: Caller, feature: str) -> bool:
-    return "admin" in identity.roles or MANAGEMENT_ROLES[feature] in identity.roles
+    if "admin" in identity.roles:
+        return True
+    if MANAGEMENT_ROLES[feature] not in identity.roles:
+        return False
+    return feature != "reports" or identity.unit in REPORT_UNITS.values()
 
 
 def require_manager(identity: Caller, feature: str) -> None:
@@ -163,6 +173,7 @@ def caller(
     x_dxos_user: str | None = Header(default=None),
     x_dxos_tenant: str | None = Header(default=None),
     x_dxos_roles: str = Header(default=""),
+    x_dxos_unit: str | None = Header(default=None),
 ) -> Caller:
     if not INTERNAL_SECRET or not x_internal_secret or not hmac.compare_digest(
         x_internal_secret, INTERNAL_SECRET
@@ -170,7 +181,7 @@ def caller(
         raise HTTPException(status_code=403, detail="Gateway access required")
     if not x_dxos_user or not x_dxos_tenant:
         raise HTTPException(status_code=403, detail="Identity context required")
-    return Caller(x_dxos_user, x_dxos_tenant, frozenset(x_dxos_roles.split(",")))
+    return Caller(x_dxos_user, x_dxos_tenant, frozenset(x_dxos_roles.split(",")), x_dxos_unit or None)
 
 
 def core_headers(identity: Caller) -> dict[str, str]:
@@ -218,6 +229,7 @@ def report_view(record: dict, instance: dict | None = None) -> dict:
         "title": record["payload"].get("title", ""),
         "description": record["payload"].get("description", ""),
         "category": record["payload"].get("category", ""),
+        "unit_id": report_unit(record),
         "address": record["payload"].get("address", ""),
         "latitude": record["payload"].get("latitude"),
         "longitude": record["payload"].get("longitude"),
@@ -231,9 +243,22 @@ def report_view(record: dict, instance: dict | None = None) -> dict:
     }
 
 
+def report_unit(record: dict) -> str:
+    # Derive from the category for both new and existing reports.
+    return REPORT_UNITS.get(record["payload"].get("category"), "intake")
+
+
+def report_visible(record: dict, identity: Caller) -> bool:
+    if "admin" in identity.roles:
+        return True
+    if can_manage(identity, "reports"):
+        return identity.unit == report_unit(record)
+    return record["created_by"] == identity.user
+
+
 async def get_report_record(report_id: str, identity: Caller) -> dict:
     record = await core_json(DATA_URL, f"/records/{report_id}", identity)
-    if record.get("kind") != "field-report":
+    if record.get("kind") != "field-report" or not report_visible(record, identity):
         raise HTTPException(status_code=404, detail="Report not found")
     return record
 
@@ -250,7 +275,10 @@ def health() -> dict:
 
 @app.get("/me/capabilities")
 def my_capabilities(identity: Caller = Depends(caller)) -> dict:
-    return {"management": [feature for feature in MANAGEMENT_ROLES if can_manage(identity, feature)]}
+    return {
+        "management": [feature for feature in MANAGEMENT_ROLES if can_manage(identity, feature)],
+        "report_unit": identity.unit if can_manage(identity, "reports") and "admin" not in identity.roles else None,
+    }
 
 
 @app.get("/bulletins")
@@ -384,7 +412,8 @@ async def list_reports(identity: Caller = Depends(caller)) -> list[dict]:
     records = await core_json(DATA_URL, "/records", identity)
     instances = await core_json(WORKFLOW_URL, "/instances", identity)
     by_record = {item["reference_id"]: item for item in instances if item["definition_key"] == "report-handling"}
-    return [report_view(item, by_record.get(item["id"])) for item in records if item["kind"] == "field-report"]
+    return [report_view(item, by_record.get(item["id"])) for item in records
+            if item["kind"] == "field-report" and report_visible(item, identity)]
 
 
 @app.post("/reports", status_code=201)

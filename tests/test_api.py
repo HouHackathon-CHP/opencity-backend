@@ -9,7 +9,9 @@ from app import main  # noqa: E402
 
 client = TestClient(main.app)
 CITIZEN = {"X-Internal-Secret": "test-secret", "X-DXOS-User": "citizen-1", "X-DXOS-Tenant": "tenant-1", "X-DXOS-Roles": "citizen"}
-REPORTS_OPERATOR = {**CITIZEN, "X-DXOS-User": "reports-1", "X-DXOS-Roles": "reports_operator"}
+REPORTS_OPERATOR = {**CITIZEN, "X-DXOS-User": "reports-1", "X-DXOS-Roles": "reports_operator",
+                    "X-DXOS-Unit": "infrastructure"}
+ENVIRONMENT_OPERATOR = {**REPORTS_OPERATOR, "X-DXOS-User": "reports-2", "X-DXOS-Unit": "environment"}
 BULLETINS_OPERATOR = {**CITIZEN, "X-DXOS-User": "bulletins-1", "X-DXOS-Roles": "bulletins_operator"}
 SURVEYS_OPERATOR = {**CITIZEN, "X-DXOS-User": "surveys-1", "X-DXOS-Roles": "surveys_operator"}
 LEGACY_OPERATOR = {**CITIZEN, "X-DXOS-User": "legacy-1", "X-DXOS-Roles": "operator"}
@@ -99,10 +101,16 @@ def test_feature_roles_are_isolated():
     }
     for feature, headers in (("reports", REPORTS_OPERATOR), ("bulletins", BULLETINS_OPERATOR),
                              ("surveys", SURVEYS_OPERATOR)):
-        assert client.get("/me/capabilities", headers=headers).json() == {"management": expected[feature]}
-    assert client.get("/me/capabilities", headers=LEGACY_OPERATOR).json() == {"management": []}
+        assert client.get("/me/capabilities", headers=headers).json() == {
+            "management": expected[feature],
+            "report_unit": "infrastructure" if feature == "reports" else None,
+        }
+    assert client.get("/me/capabilities", headers=LEGACY_OPERATOR).json() == {
+        "management": [], "report_unit": None}
     assert client.get("/me/capabilities", headers={**CITIZEN, "X-DXOS-Roles": "admin"}).json() == {
-        "management": ["reports", "bulletins", "surveys"]}
+        "management": ["reports", "bulletins", "surveys"], "report_unit": None}
+    assert client.get("/me/capabilities", headers={**REPORTS_OPERATOR, "X-DXOS-Unit": ""}).json() == {
+        "management": [], "report_unit": None}
     assert client.post("/reports/report-1/actions/triage", headers=BULLETINS_OPERATOR).status_code == 403
     assert client.post("/reports/report-1/actions/triage", headers=LEGACY_OPERATOR).status_code == 403
     bulletin = {"category": "news", "title": "Thông báo mẫu", "summary": "Thông báo kiểm thử quyền.",
@@ -114,12 +122,41 @@ def test_feature_roles_are_isolated():
     assert client.post("/bulletins", headers=SURVEYS_OPERATOR, json=bulletin).status_code == 403
     assert "operator" not in main.core_headers(main.caller(**{
         "x_internal_secret": "test-secret", "x_dxos_user": "legacy-1",
-        "x_dxos_tenant": "tenant-1", "x_dxos_roles": "operator",
+        "x_dxos_tenant": "tenant-1", "x_dxos_roles": "operator", "x_dxos_unit": None,
     }))["X-DXOS-Roles"]
     assert "operator" in main.core_headers(main.caller(**{
         "x_internal_secret": "test-secret", "x_dxos_user": "reports-1",
         "x_dxos_tenant": "tenant-1", "x_dxos_roles": "reports_operator",
+        "x_dxos_unit": "infrastructure",
     }))["X-DXOS-Roles"]
+
+
+def test_report_unit_scopes_lists_details_and_actions(monkeypatch):
+    records = [
+        {"id": "infrastructure-case", "kind": "field-report", "payload": {"category": "Chiếu sáng"},
+         "created_by": "citizen-1", "created_at": "2026-10-23T00:00:00Z", "updated_at": "2026-10-23T00:00:00Z"},
+        {"id": "environment-case", "kind": "field-report", "payload": {"category": "Môi trường"},
+         "created_by": "citizen-2", "created_at": "2026-10-23T00:00:00Z", "updated_at": "2026-10-23T00:00:00Z"},
+    ]
+
+    async def fake_core(base, path, identity, method="GET", **kwargs):
+        if path == "/records":
+            return records
+        if path == "/instances":
+            return []
+        if path.startswith("/records/"):
+            return next(item for item in records if item["id"] == path.rsplit("/", 1)[-1])
+        raise AssertionError(f"Unexpected core call: {path}")
+
+    monkeypatch.setattr(main, "core_json", fake_core)
+    assert [item["id"] for item in client.get("/reports", headers=REPORTS_OPERATOR).json()] == ["infrastructure-case"]
+    assert [item["id"] for item in client.get("/reports", headers=ENVIRONMENT_OPERATOR).json()] == ["environment-case"]
+    assert [item["id"] for item in client.get("/reports", headers=CITIZEN).json()] == ["infrastructure-case"]
+    assert client.get("/reports/environment-case", headers=REPORTS_OPERATOR).status_code == 404
+    assert client.post("/reports/environment-case/actions/triage", headers=REPORTS_OPERATOR).status_code == 404
+    assert client.post("/reports/environment-case/retry-workflow", headers=REPORTS_OPERATOR).status_code == 404
+    assert client.get("/reports/environment-case/attachments/photo-1", headers=REPORTS_OPERATOR).status_code == 404
+    assert client.get("/reports/infrastructure-case", headers=REPORTS_OPERATOR).json()["unit_id"] == "infrastructure"
 
 
 def test_invalid_category_is_rejected_before_core_call(monkeypatch):
