@@ -610,8 +610,7 @@ def close_survey(survey_id: str, identity: Caller = Depends(caller)) -> dict:
         return survey_view(connection, survey_row(connection, survey_id, identity), identity)
 
 
-@app.get("/reports")
-async def list_reports(identity: Caller = Depends(caller)) -> list[dict]:
+async def visible_report_views(identity: Caller) -> list[dict]:
     records = await core_json(DATA_URL, "/records", identity)
     instances = await core_json(WORKFLOW_URL, "/instances", identity)
     by_record = {item["reference_id"]: item for item in instances if item["definition_key"] == "report-handling"}
@@ -619,6 +618,73 @@ async def list_reports(identity: Caller = Depends(caller)) -> list[dict]:
     return [report_view_with_routing(item, by_record.get(item["id"]), routing.get(item["id"]))
             for item in records if item["kind"] == "field-report"
             and report_visible(item, identity, routing.get(item["id"]))]
+
+
+def report_deadline_status(report: dict, now: datetime) -> str | None:
+    if report["state"] == "resolved" or not report["due_at"]:
+        return None
+    try:
+        due = datetime.fromisoformat(report["due_at"])
+    except ValueError:
+        return None
+    if due.tzinfo is None:
+        return None
+    if due < now:
+        return "overdue"
+    if due <= now + timedelta(hours=24):
+        return "due_soon"
+    return None
+
+
+def report_dashboard(reports: list[dict], now: datetime) -> dict:
+    counts = {key: 0 for key in (
+        "total", "new", "triaged", "in_progress", "resolved", "unassigned", "due_soon", "overdue")}
+    units: dict[str, dict] = {}
+    urgent: list[dict] = []
+    for report in reports:
+        state = report["state"] or "submitted"
+        unit = report["assigned_unit"] or "unassigned"
+        deadline = report_deadline_status(report, now)
+        counts["total"] += 1
+        if state == "submitted":
+            counts["new"] += 1
+        elif state == "triaged":
+            counts["triaged"] += 1
+        elif state == "assigned":
+            counts["in_progress"] += 1
+        elif state == "resolved":
+            counts["resolved"] += 1
+        if unit == "unassigned" and state != "resolved":
+            counts["unassigned"] += 1
+        if deadline:
+            counts[deadline] += 1
+        row = units.setdefault(unit, {"unit_id": unit, "total": 0, "active": 0,
+                                      "resolved": 0, "due_soon": 0, "overdue": 0})
+        row["total"] += 1
+        row["resolved" if state == "resolved" else "active"] += 1
+        if deadline:
+            row[deadline] += 1
+        priority = deadline or ("unassigned" if unit == "unassigned" and state != "resolved" else None)
+        if priority:
+            urgent.append({key: report[key] for key in (
+                "id", "title", "category", "address", "state", "assigned_unit", "due_at")}
+                          | {"priority": priority})
+    rank = {"overdue": 0, "due_soon": 1, "unassigned": 2}
+    urgent.sort(key=lambda item: (rank[item["priority"]], item["due_at"] or "", item["id"]))
+    return {"generated_at": now.isoformat(), "counts": counts,
+            "units": sorted(units.values(), key=lambda row: row["unit_id"]),
+            "urgent": urgent[:10]}
+
+
+@app.get("/reports")
+async def list_reports(identity: Caller = Depends(caller)) -> list[dict]:
+    return await visible_report_views(identity)
+
+
+@app.get("/reports/dashboard")
+async def get_reports_dashboard(identity: Caller = Depends(caller)) -> dict:
+    require_manager(identity, "reports")
+    return report_dashboard(await visible_report_views(identity), datetime.now(timezone.utc))
 
 
 @app.post("/reports", status_code=201)

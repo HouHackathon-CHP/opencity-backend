@@ -173,6 +173,60 @@ def test_report_unit_scopes_lists_details_and_actions(monkeypatch, tmp_path):
     assert client.get("/reports/infrastructure-case", headers=REPORTS_OPERATOR).json()["unit_id"] == "infrastructure"
 
 
+def test_report_dashboard_counts_deadlines_and_respects_unit_scope(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
+    now = datetime.now(timezone.utc)
+    records = [{
+        "id": report_id, "kind": "field-report", "payload": {"title": report_id, "category": category,
+            "address": "Khu thử nghiệm"}, "created_by": "citizen-1", "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    } for report_id, category in [
+        ("new-case", "Hạ tầng"), ("soon-case", "Môi trường"),
+        ("late-case", "Chiếu sáng"), ("closed-case", "Chiếu sáng")]]
+    states = {"new-case": "submitted", "soon-case": "assigned",
+              "late-case": "assigned", "closed-case": "resolved"}
+
+    async def fake_core(base, path, identity, method="GET", **kwargs):
+        if identity.tenant != "tenant-1":
+            return []
+        if path == "/records":
+            return records
+        if path == "/instances":
+            return [{"id": f"workflow-{item['id']}", "definition_key": "report-handling",
+                     "reference_id": item["id"], "state": states[item["id"]], "history": []}
+                    for item in records]
+        raise AssertionError(f"Unexpected core call: {path}")
+
+    monkeypatch.setattr(main, "core_json", fake_core)
+    with main.report_db() as connection:
+        connection.executemany("""
+            INSERT INTO report_assignments
+              (report_id, tenant, unit_id, due_at, assigned_at, assigned_by)
+            VALUES (?, 'tenant-1', ?, ?, ?, 'dispatcher-1')
+        """, [
+            ("soon-case", "environment", (now + timedelta(hours=2)).isoformat(), now.isoformat()),
+            ("late-case", "infrastructure", (now - timedelta(hours=2)).isoformat(), now.isoformat()),
+            ("closed-case", "infrastructure", (now - timedelta(days=1)).isoformat(), now.isoformat()),
+        ])
+    assert client.get("/reports/dashboard").status_code == 403
+    assert client.get("/reports/dashboard", headers=CITIZEN).status_code == 403
+    assert client.get("/reports/dashboard", headers=BULLETINS_OPERATOR).status_code == 403
+    dashboard = client.get("/reports/dashboard", headers=DISPATCHER)
+    assert dashboard.status_code == 200
+    assert dashboard.json()["counts"] == {"total": 4, "new": 1, "triaged": 0, "in_progress": 2,
+        "resolved": 1, "unassigned": 1, "due_soon": 1, "overdue": 1}
+    assert [item["id"] for item in dashboard.json()["urgent"]] == [
+        "late-case", "soon-case", "new-case"]
+    assert {row["unit_id"]: row["total"] for row in dashboard.json()["units"]} == {
+        "infrastructure": 2, "environment": 1, "unassigned": 1}
+    infra = client.get("/reports/dashboard", headers=REPORTS_OPERATOR).json()
+    assert infra["counts"]["total"] == 2 and infra["counts"]["overdue"] == 1
+    assert {row["unit_id"] for row in infra["units"]} == {"infrastructure"}
+    environment = client.get("/reports/dashboard", headers=ENVIRONMENT_OPERATOR).json()
+    assert environment["counts"]["total"] == 1 and environment["counts"]["due_soon"] == 1
+    assert client.get("/reports/dashboard", headers={**DISPATCHER, "X-DXOS-Tenant": "tenant-2"}).json()["counts"]["total"] == 0
+
+
 def test_dispatch_accept_transfer_and_resolve(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
     record = {"id": "report-1", "kind": "field-report", "payload": {"category": "Chiếu sáng"},

@@ -11,6 +11,7 @@ Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/ope
 - Store report notifications for citizens, assigned units and dispatchers, with per-user read state and idempotent deadline reminders.
 - Publish tenant-scoped news and alerts for citizen apps. Only `bulletins_operator` or `admin` can publish; all authenticated members of that tenant can read.
 - Run tenant-scoped, single-choice surveys. `surveys_operator` or `admin` can publish and close them; each account can answer once.
+- Summarize visible reports for the staff SLA dashboard: state counts, unassigned cases, next-24-hour deadlines, overdue cases, unit workload and a priority queue. The API applies the same report visibility rules before aggregating.
 
 ## Local stack
 
@@ -20,6 +21,7 @@ Keep `dxos-core`, `opencity-frontend` and `opencity-backend` as sibling director
 docker compose --env-file ..\dxos-core\.env -f ..\dxos-core\compose.yaml -f compose.stack.yaml up --build -d
 python ..\dxos-core\scripts\smoke.py
 python scripts\smoke_app.py
+python scripts\seed_dashboard_demo.py
 ```
 
 The first command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail.
@@ -40,6 +42,7 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 | `GET` | `/notifications` | List visible in-app notices and materialize deadline reminders |
 | `POST` | `/notifications/{id}/read` | Mark a visible notice read for this account |
 | `GET` | `/reports` | List reports visible to the caller |
+| `GET` | `/reports/dashboard` | Staff-only scoped SLA summary and priority queue |
 | `POST` | `/reports` | Create a report (multipart form, optional photo) |
 | `GET` | `/reports/{id}` | Report and workflow history |
 | `POST` | `/reports/{id}/dispatch` | Coordinator assigns/reassigns unit and deadline |
@@ -58,6 +61,8 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 | `POST` | `/surveys/{id}/close` | Close a survey (`surveys_operator`) |
 
 The gateway prefixes these with `/api/opencity`.
+
+`seed_dashboard_demo.py` inserts five `[DEMO SLA]` reports at different Hanoi coordinates, dispatches four of them with different future deadlines, and leaves one awaiting dispatch. It is idempotent. The short deadlines become overdue naturally if the stack remains running; the script never rewrites existing deadlines.
 
 Bulletins use a separate persistent SQLite volume in the local Compose stack. They are entered by an operator; no official news feed is bundled. `POST /bulletins` accepts `category` (`news` or `alert`), `title`, `summary`, `body`, and optional `area`, `latitude`, `longitude`. The smoke script inserts one clearly marked `[DEMO]` alert if it is absent, so the mobile map and feed can be tested.
 
