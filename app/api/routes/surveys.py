@@ -6,9 +6,9 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.security import Caller, caller, require_manager
-from app.surveys.schemas import SurveyInput, SurveyAnswer
-from app.surveys.storage import survey_db, survey_row, survey_view
+from app.core.security import Caller, caller, require_manager
+from app.schemas.surveys import SurveyInput, SurveyAnswer
+from app.repositories.surveys import survey_db, survey_row, survey_view
 
 
 router = APIRouter()

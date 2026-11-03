@@ -5,9 +5,9 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.security import Caller, caller, require_manager
-from app.bulletins.schemas import BulletinInput
-from app.bulletins.storage import bulletin_db, bulletin_view
+from app.core.security import Caller, caller, require_manager
+from app.schemas.bulletins import BulletinInput
+from app.repositories.bulletins import bulletin_db, bulletin_view
 
 
 router = APIRouter()

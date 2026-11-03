@@ -6,8 +6,9 @@ os.environ["INTERNAL_GATEWAY_SECRET"] = "test-secret"
 
 from fastapi.testclient import TestClient  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
-from app import main, config, core_client, security  # noqa: E402
-from app.reports import storage as report_storage  # noqa: E402
+from app import main  # noqa: E402
+from app.core import config, core_client, security  # noqa: E402
+from app.repositories import reports as report_storage  # noqa: E402
 
 
 client = TestClient(main.app)

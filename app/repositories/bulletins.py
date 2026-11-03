@@ -2,7 +2,7 @@
 import sqlite3
 from pathlib import Path
 
-from app import config
+from app.core import config
 
 
 def bulletin_db() -> sqlite3.Connection:

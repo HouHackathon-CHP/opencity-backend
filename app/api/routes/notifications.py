@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.security import Caller, caller
-from app.reports.storage import report_db
-from app.notifications.service import (
+from app.core.security import Caller, caller
+from app.repositories.reports import report_db
+from app.services.notifications import (
     materialize_deadline_notifications, notification_scope, notification_view,
 )
 

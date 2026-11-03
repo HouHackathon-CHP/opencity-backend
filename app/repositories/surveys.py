@@ -4,8 +4,8 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from app import config
-from app.security import Caller, can_manage
+from app.core import config
+from app.core.security import Caller, can_manage
 
 
 def survey_db() -> sqlite3.Connection:

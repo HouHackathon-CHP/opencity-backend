@@ -1,50 +1,58 @@
-# Backend code layout
+# Backend architecture
 
-The OpenCity API uses a feature-first FastAPI layout. A feature owns its HTTP
-routes, request schemas and persistence code. Cross-feature infrastructure stays
-at the root of `app/`.
+OpenCity Backend is a FastAPI application organized by **layer**. This is the
+project convention for this repository. FastAPI provides `APIRouter` for larger
+applications but does not prescribe one mandatory directory tree. The layout is
+similar to GreenMap Backend's `api`, `core`, `schemas`, `services` and persistence
+layers, adapted to OpenCity's DX-OS Core integration and local SQLite storage.
 
 ```text
 app/
-  main.py              FastAPI construction, health, router registration
-  config.py            Environment-backed settings and shared constants
-  security.py          Gateway identity context and feature permissions
-  core_client.py       Calls to the headless DX-OS data/workflow services
-  reports/
-    router.py          Report HTTP routes and orchestration
-    schemas.py         Dispatch, transfer and note request models
-    service.py         Report visibility, views and SLA aggregation
-    storage.py         Local routing and audit tables
-  notifications/
-    router.py          Inbox HTTP routes
-    service.py         Recipients, read views and deadline reminders
-  bulletins/
-    router.py          Bulletin HTTP routes
-    schemas.py         Publication request model
-    storage.py         Bulletin table and view
-  surveys/
-    router.py          Survey HTTP routes
-    schemas.py         Publication and answer request models
-    storage.py         Survey tables, lookup and result visibility
+  main.py                   Construct FastAPI and register the API router
+  api/
+    router.py               Register all route modules in one place
+    routes/
+      system.py             Health and caller capabilities
+      reports.py            Report HTTP endpoints
+      notifications.py      Inbox HTTP endpoints
+      bulletins.py          News and alert HTTP endpoints
+      surveys.py            Survey HTTP endpoints
+  core/
+    config.py               Environment settings and shared constants
+    security.py             Gateway identity and feature permissions
+    core_client.py          HTTP calls to DX-OS data and workflow services
+  schemas/
+    reports.py              Dispatch, transfer and note request models
+    bulletins.py            Publication request model
+    surveys.py              Publication and answer request models
+  services/
+    reports.py              Report visibility, views and SLA aggregation
+    notifications.py        Recipients, read views and deadline reminders
+  repositories/
+    reports.py              Local routing, audit and inbox SQLite tables
+    bulletins.py            Bulletin SQLite table and view
+    surveys.py              Survey SQLite tables, lookup and result view
 tests/
-  test_api.py          API behavior, permissions and tenant isolation
-scripts/               Demo provisioning, smoke and license checks
+  test_api.py               API behavior, permissions and tenant isolation
+scripts/                    Demo provisioning, smoke and license checks
 ```
 
-`main.py` registers routers but contains no feature rules. Routers validate HTTP
-inputs, enforce permissions and coordinate the feature's service/storage calls.
-Services contain reusable domain decisions; storage owns SQL and connection
-setup. `security.py` remains the only source of gateway identity and feature-role
-rules. The gateway authenticates tokens; this backend verifies the injected
-internal secret and applies tenant/unit permissions to every feature operation.
+Dependency direction: routes use schemas, services, repositories and core;
+services use repositories and core; repositories use core configuration. Keep
+HTTP path registration in `api/router.py`. Add a route module for each new area,
+and add a schema, service or repository module only when that area needs it.
+The gateway authenticates tokens; `core/security.py` verifies its injected
+internal secret and applies tenant, unit and feature permissions.
 
-For a new feature, add an `app/<feature>/` package with `router.py`,
-`schemas.py` and `storage.py`; add `service.py` when domain decisions are shared
-by more than one route. Register its router in `main.py`, add its role to
-`config.MANAGEMENT_ROLES` if it has staff actions, document its API contract and
-test both permitted and denied access. Keep deployment-time service discovery in
-the frontend's catalog manifest; the backend does not load arbitrary plugin code
-at runtime.
+This prototype still has some SQL transactions and workflow orchestration inside
+the route handlers, particularly for report transitions. New persistence code
+should go in `repositories/`, with business decisions in `services/`. The
+current layout change only moves Python modules; it does not change public URL
+paths, request or response bodies, or the SQLite files.
 
-This refactor changes Python module locations only. Public URL paths and JSON
-responses remain the same, so web and Android clients need no change.
+There is no SQLAlchemy ORM in this service, so `models/`, `crud/` and
+`db/session.py` are intentionally absent. Add those layers if a shared database
+session and ORM entities are introduced. DX-OS Core remains a separate headless
+service, not a Python package inside this backend. Deployment-time feature
+discovery remains in the frontend catalog; this backend does not load arbitrary
+plugin code at runtime.

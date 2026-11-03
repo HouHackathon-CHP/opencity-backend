@@ -3,9 +3,9 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
-from app import config, core_client
-from app.security import Caller, can_dispatch
-from app.reports.storage import routing_for, routing_map
+from app.core import config, core_client
+from app.core.security import Caller, can_dispatch
+from app.repositories.reports import routing_for, routing_map
 
 
 def matches_image_type(content: bytes, claimed_type: str) -> bool:

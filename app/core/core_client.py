@@ -2,8 +2,8 @@
 import httpx
 from fastapi import HTTPException
 
-from app import config
-from app.security import Caller, can_manage
+from app.core import config
+from app.core.security import Caller, can_manage
 
 
 def core_headers(identity: Caller) -> dict[str, str]:

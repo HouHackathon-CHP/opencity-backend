@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from fastapi import Header, HTTPException
 
-from app import config
+from app.core import config
 
 
 @dataclass(frozen=True)

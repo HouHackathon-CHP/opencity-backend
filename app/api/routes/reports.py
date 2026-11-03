@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from app import config, core_client
-from app.security import Caller, caller, can_dispatch, require_manager
-from app.notifications.service import add_notification
-from app.reports.schemas import DispatchInput, TransferInput, NoteInput
-from app.reports.storage import report_db, routing_for, add_report_event
-from app.reports.service import (
+from app.core import config, core_client
+from app.core.security import Caller, caller, can_dispatch, require_manager
+from app.services.notifications import add_notification
+from app.schemas.reports import DispatchInput, TransferInput, NoteInput
+from app.repositories.reports import report_db, routing_for, add_report_event
+from app.services.reports import (
     matches_image_type, report_view, report_view_with_routing, get_report_record,
     find_instance, visible_report_views, report_dashboard,
 )

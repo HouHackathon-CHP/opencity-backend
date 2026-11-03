@@ -3,8 +3,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from app import config
-from app.security import Caller, can_dispatch
+from app.core import config
+from app.core.security import Caller, can_dispatch
 
 
 def add_notification(connection: sqlite3.Connection, tenant: str, report_id: str,

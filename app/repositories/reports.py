@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from app import config
-from app.security import Caller
+from app.core import config
+from app.core.security import Caller
 
 
 def report_db() -> sqlite3.Connection:
