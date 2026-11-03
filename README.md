@@ -4,6 +4,12 @@ Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/ope
 
 ## Responsibilities
 
+The API follows a feature-first FastAPI layout: `app/main.py` registers routers;
+`app/reports`, `app/notifications`, `app/bulletins` and `app/surveys` own their
+routes and feature code. Shared gateway identity, DX-OS calls and settings live
+in `app/security.py`, `app/core_client.py` and `app/config.py`. See
+[`docs/architecture.md`](docs/architecture.md) for the directory contract.
+
 - Validate field report data and image size/type.
 - Compose a tenant-scoped data record, optional stored object, and `report-handling` workflow instance.
 - Return one domain response to the frontend instead of exposing the data/workflow APIs as its application contract.

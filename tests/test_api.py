@@ -6,7 +6,8 @@ os.environ["INTERNAL_GATEWAY_SECRET"] = "test-secret"
 
 from fastapi.testclient import TestClient  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
-from app import main  # noqa: E402
+from app import main, config, core_client, security  # noqa: E402
+from app.reports import storage as report_storage  # noqa: E402
 
 
 client = TestClient(main.app)
@@ -28,7 +29,7 @@ def test_direct_request_is_rejected():
 
 
 def test_bulletins_are_operator_published_and_tenant_scoped(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "NEWS_DB_PATH", str(tmp_path / "bulletins.sqlite3"))
+    monkeypatch.setattr(config, "NEWS_DB_PATH", str(tmp_path / "bulletins.sqlite3"))
     body = {
         "category": "alert", "title": "Diễn tập cảnh báo",
         "summary": "Thông báo chỉ dùng để kiểm thử ứng dụng.",
@@ -46,7 +47,7 @@ def test_bulletins_are_operator_published_and_tenant_scoped(monkeypatch, tmp_pat
 
 
 def test_survey_lifecycle_is_tenant_scoped_and_one_answer_per_user(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "SURVEY_DB_PATH", str(tmp_path / "surveys.sqlite3"))
+    monkeypatch.setattr(config, "SURVEY_DB_PATH", str(tmp_path / "surveys.sqlite3"))
     body = {"title": "Khảo sát tuyến phố", "description": "Chọn ưu tiên cải thiện tuyến phố trong tháng tới.",
             "options": ["Thêm cây xanh", "Cải thiện chiếu sáng"]}
     assert client.post("/surveys", headers=CITIZEN, json=body).status_code == 403
@@ -87,7 +88,7 @@ def test_survey_lifecycle_is_tenant_scoped_and_one_answer_per_user(monkeypatch, 
 
 
 def test_survey_rejects_duplicate_or_blank_options(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "SURVEY_DB_PATH", str(tmp_path / "surveys.sqlite3"))
+    monkeypatch.setattr(config, "SURVEY_DB_PATH", str(tmp_path / "surveys.sqlite3"))
     base = {"title": "Khảo sát thử nghiệm", "description": "Nội dung chỉ phục vụ kiểm thử chức năng khảo sát."}
     for options in (["Một", "một"], ["Một", "  "]):
         response = client.post("/surveys", headers=SURVEYS_OPERATOR, json={**base, "options": options})
@@ -127,11 +128,11 @@ def test_feature_roles_are_isolated():
     assert client.post("/bulletins", headers=REPORTS_OPERATOR, json=bulletin).status_code == 403
     assert client.post("/surveys", headers=BULLETINS_OPERATOR, json=survey).status_code == 403
     assert client.post("/bulletins", headers=SURVEYS_OPERATOR, json=bulletin).status_code == 403
-    assert "operator" not in main.core_headers(main.caller(**{
+    assert "operator" not in core_client.core_headers(security.caller(**{
         "x_internal_secret": "test-secret", "x_dxos_user": "legacy-1",
         "x_dxos_tenant": "tenant-1", "x_dxos_roles": "operator", "x_dxos_unit": None,
     }))["X-DXOS-Roles"]
-    assert "operator" in main.core_headers(main.caller(**{
+    assert "operator" in core_client.core_headers(security.caller(**{
         "x_internal_secret": "test-secret", "x_dxos_user": "reports-1",
         "x_dxos_tenant": "tenant-1", "x_dxos_roles": "reports_operator",
         "x_dxos_unit": "infrastructure",
@@ -139,7 +140,7 @@ def test_feature_roles_are_isolated():
 
 
 def test_report_unit_scopes_lists_details_and_actions(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
+    monkeypatch.setattr(config, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
     records = [
         {"id": "infrastructure-case", "kind": "field-report", "payload": {"category": "Chiếu sáng"},
          "created_by": "citizen-1", "created_at": "2026-10-23T00:00:00Z", "updated_at": "2026-10-23T00:00:00Z"},
@@ -156,8 +157,8 @@ def test_report_unit_scopes_lists_details_and_actions(monkeypatch, tmp_path):
             return next(item for item in records if item["id"] == path.rsplit("/", 1)[-1])
         raise AssertionError(f"Unexpected core call: {path}")
 
-    monkeypatch.setattr(main, "core_json", fake_core)
-    with main.report_db() as connection:
+    monkeypatch.setattr(core_client, "core_json", fake_core)
+    with report_storage.report_db() as connection:
         connection.executemany("""
             INSERT INTO report_assignments
               (report_id, tenant, unit_id, due_at, assigned_at, assigned_by)
@@ -174,7 +175,7 @@ def test_report_unit_scopes_lists_details_and_actions(monkeypatch, tmp_path):
 
 
 def test_report_dashboard_counts_deadlines_and_respects_unit_scope(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
+    monkeypatch.setattr(config, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
     now = datetime.now(timezone.utc)
     records = [{
         "id": report_id, "kind": "field-report", "payload": {"title": report_id, "category": category,
@@ -197,8 +198,8 @@ def test_report_dashboard_counts_deadlines_and_respects_unit_scope(monkeypatch, 
                     for item in records]
         raise AssertionError(f"Unexpected core call: {path}")
 
-    monkeypatch.setattr(main, "core_json", fake_core)
-    with main.report_db() as connection:
+    monkeypatch.setattr(core_client, "core_json", fake_core)
+    with report_storage.report_db() as connection:
         connection.executemany("""
             INSERT INTO report_assignments
               (report_id, tenant, unit_id, due_at, assigned_at, assigned_by)
@@ -228,7 +229,7 @@ def test_report_dashboard_counts_deadlines_and_respects_unit_scope(monkeypatch, 
 
 
 def test_dispatch_accept_transfer_and_resolve(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
+    monkeypatch.setattr(config, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
     record = {"id": "report-1", "kind": "field-report", "payload": {"category": "Chiếu sáng"},
               "created_by": "citizen-1", "created_at": "2026-10-23T00:00:00Z",
               "updated_at": "2026-10-23T00:00:00Z"}
@@ -257,7 +258,7 @@ def test_dispatch_accept_transfer_and_resolve(monkeypatch, tmp_path):
             return instance()
         raise AssertionError(f"Unexpected core call: {path}")
 
-    monkeypatch.setattr(main, "core_json", fake_core)
+    monkeypatch.setattr(core_client, "core_json", fake_core)
     route = "/reports/report-1"
     due_at = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
     dispatch = {"unit_id": "environment", "due_at": due_at, "note": "Chuyển đơn vị môi trường kiểm tra"}
@@ -315,7 +316,7 @@ def test_invalid_category_is_rejected_before_core_call(monkeypatch):
     async def unexpected(*args, **kwargs):
         raise AssertionError("Core must not be called")
 
-    monkeypatch.setattr(main, "core_json", unexpected)
+    monkeypatch.setattr(core_client, "core_json", unexpected)
     result = client.post("/reports", headers=CITIZEN, data={
         "title": "Đèn đường bị hỏng", "description": "Đèn đường đã không sáng trong nhiều ngày.",
         "category": "Không xác định", "address": "Phố thử nghiệm",
@@ -327,7 +328,7 @@ def test_spoofed_image_is_rejected_before_core_call(monkeypatch):
     async def unexpected(*args, **kwargs):
         raise AssertionError("Core must not be called")
 
-    monkeypatch.setattr(main, "core_json", unexpected)
+    monkeypatch.setattr(core_client, "core_json", unexpected)
     result = client.post("/reports", headers=CITIZEN, data={
         "title": "Đèn đường bị hỏng", "description": "Đèn đường đã không sáng trong nhiều ngày.",
         "category": "Chiếu sáng", "address": "Phố thử nghiệm",
@@ -336,7 +337,7 @@ def test_spoofed_image_is_rejected_before_core_call(monkeypatch):
 
 
 def test_create_report_uses_data_and_workflow(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
+    monkeypatch.setattr(config, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
     calls = []
 
     async def fake_core(base, path, identity, method="GET", **kwargs):
@@ -352,7 +353,7 @@ def test_create_report_uses_data_and_workflow(monkeypatch, tmp_path):
                     "created_by": identity.user, "created_at": "2026-10-23T00:00:00Z", "updated_at": "2026-10-23T00:00:00Z"}
         raise AssertionError(f"Unexpected core call: {path}")
 
-    monkeypatch.setattr(main, "core_json", fake_core)
+    monkeypatch.setattr(core_client, "core_json", fake_core)
     result = client.post("/reports", headers=CITIZEN, data={
         "title": "Đèn đường bị hỏng", "description": "Đèn đường đã không sáng trong nhiều ngày.",
         "category": "Chiếu sáng", "address": "Phố thử nghiệm",
@@ -365,9 +366,9 @@ def test_create_report_uses_data_and_workflow(monkeypatch, tmp_path):
 
 
 def test_deadline_reminders_are_scoped_and_idempotent(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
+    monkeypatch.setattr(config, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
     due = (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat()
-    with main.report_db() as connection:
+    with report_storage.report_db() as connection:
         connection.execute("""
             INSERT INTO report_assignments
               (report_id, tenant, unit_id, due_at, assigned_at, assigned_by)
@@ -379,7 +380,7 @@ def test_deadline_reminders_are_scoped_and_idempotent(monkeypatch, tmp_path):
     assert client.get("/notifications", headers=REPORTS_OPERATOR).json() == []
     assert client.get("/notifications", headers=OUTSIDER).json() == []
     assert len(client.get("/notifications", headers=DISPATCHER).json()) == 1
-    with main.report_db() as connection:
+    with report_storage.report_db() as connection:
         connection.execute("UPDATE report_assignments SET due_at = ? WHERE report_id = 'reminder-case'",
                            ((datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),))
     overdue = client.get("/notifications", headers=ENVIRONMENT_OPERATOR).json()
