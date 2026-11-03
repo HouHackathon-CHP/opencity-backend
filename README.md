@@ -20,6 +20,7 @@ DX-OS integration. See
 - Run tenant-scoped, single-choice surveys. `surveys_operator` or `admin` can publish and close them; each account can answer once.
 - Manage local citizen reception appointments: `appointments_operator` publishes future slots and confirms or rejects requests; citizens request and cancel their own appointments. Confirmations respect per-slot capacity.
 - Summarize visible reports for the staff SLA dashboard: state counts, unassigned cases, next-24-hour deadlines, overdue cases, unit workload and a priority queue. The API applies the same report visibility rules before aggregating.
+- Offer dispatcher-only, human-reviewed text triage: suggest a unit and attention level, surface similar reports, and record whether the final unit matched the suggestion. It does not auto-dispatch or interpret images.
 
 ## Local stack
 
@@ -51,8 +52,10 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 | `POST` | `/notifications/{id}/read` | Mark a visible notice read for this account |
 | `GET` | `/reports` | List reports visible to the caller |
 | `GET` | `/reports/dashboard` | Staff-only scoped SLA summary and priority queue |
+| `GET` | `/reports/triage-metrics` | Dispatcher-only suggestion and review counts |
 | `POST` | `/reports` | Create a report (multipart form, optional photo) |
 | `GET` | `/reports/{id}` | Report and workflow history |
+| `GET`, `POST` | `/reports/{id}/triage-suggestion` | Read or generate a dispatcher-only suggestion |
 | `POST` | `/reports/{id}/dispatch` | Coordinator assigns/reassigns unit and deadline |
 | `POST` | `/reports/{id}/accept` | Assigned unit accepts work |
 | `POST` | `/reports/{id}/progress` | Accepted unit posts a public progress note |
@@ -73,6 +76,8 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 | `POST` | `/appointments/{id}/cancel` | Cancel one's own pending or confirmed request |
 
 The gateway prefixes these with `/api/opencity`.
+
+The triage service calls the internal DX-OS `insight` module with report text, curated examples, prior assignments and similar-case candidates from the same tenant. Results and a final unit review are saved in the report-routing SQLite database. The dispatcher can change the suggested unit and must set a deadline. When text provides no matching signal, the suggestion falls back to general intake and normal attention for manual review. The attention level is advisory and does not alter SLA rules. Text scores are relative rankings, not calibrated confidence; image contents are not analyzed.
 
 `seed_dashboard_demo.py` inserts five `[DEMO SLA]` reports at different Hanoi coordinates, dispatches four of them with different future deadlines, and leaves one awaiting dispatch. It is idempotent. The short deadlines become overdue naturally if the stack remains running; the script never rewrites existing deadlines.
 

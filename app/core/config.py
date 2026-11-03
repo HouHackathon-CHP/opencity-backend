@@ -6,6 +6,7 @@ import os
 INTERNAL_SECRET = os.getenv("INTERNAL_GATEWAY_SECRET", "")
 DATA_URL = os.getenv("DATA_URL", "http://data:8000")
 WORKFLOW_URL = os.getenv("WORKFLOW_URL", "http://workflow:8000")
+INSIGHT_URL = os.getenv("INSIGHT_URL", "http://insight:8000")
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 REPORT_CATEGORIES = {"Hạ tầng", "Môi trường", "Giao thông", "Chiếu sáng", "Cây xanh", "Khác"}
