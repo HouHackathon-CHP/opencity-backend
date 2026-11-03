@@ -69,7 +69,7 @@ def save_triage_suggestion(identity: Caller, report_id: str, source_updated_at: 
                            analysis: dict) -> dict:
     suggestion_id = str(uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    suggested_unit = analysis["ranked_labels"][0]["label"]
+    suggested_unit = analysis.get("suggested_unit", analysis["ranked_labels"][0]["label"])
     with closing(report_db()) as connection:
         with connection:
             connection.execute(

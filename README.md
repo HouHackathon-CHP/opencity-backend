@@ -77,7 +77,7 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 
 The gateway prefixes these with `/api/opencity`.
 
-The triage service calls the internal DX-OS `insight` module with report text, curated examples, prior assignments and similar-case candidates from the same tenant. Results and a final unit review are saved in the report-routing SQLite database. The dispatcher can change the suggested unit and must set a deadline. The attention level is advisory and does not alter SLA rules. Text scores are relative rankings, not calibrated confidence; image contents are not analyzed.
+The triage service calls the internal DX-OS `insight` module with report text, curated examples, prior assignments and similar-case candidates from the same tenant. Results and a final unit review are saved in the report-routing SQLite database. The dispatcher can change the suggested unit and must set a deadline. When text provides no matching signal, the suggestion falls back to general intake and normal attention for manual review. The attention level is advisory and does not alter SLA rules. Text scores are relative rankings, not calibrated confidence; image contents are not analyzed.
 
 `seed_dashboard_demo.py` inserts five `[DEMO SLA]` reports at different Hanoi coordinates, dispatches four of them with different future deadlines, and leaves one awaiting dispatch. It is idempotent. The short deadlines become overdue naturally if the stack remains running; the script never rewrites existing deadlines.
 

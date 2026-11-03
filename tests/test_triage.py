@@ -2,6 +2,7 @@
 """Dispatcher-only insight and human review audit."""
 
 import os
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 os.environ["INTERNAL_GATEWAY_SECRET"] = "test-secret"
@@ -9,7 +10,9 @@ os.environ["INTERNAL_GATEWAY_SECRET"] = "test-secret"
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from app.core import config, core_client  # noqa: E402
+from app.core.security import Caller  # noqa: E402
 from app.main import app  # noqa: E402
+from app.services import triage as triage_service  # noqa: E402
 
 
 client = TestClient(app)
@@ -72,7 +75,7 @@ def test_suggestion_is_scoped_and_dispatch_review_is_audited(monkeypatch, tmp_pa
     assert created.status_code == 201
     suggestion = created.json()
     assert suggestion["suggested_unit"] == "infrastructure"
-    assert suggestion["urgency"] == "high"
+    assert suggestion["urgency"] == "normal"
     assert suggestion["similar"][0]["id"] == "report-2"
     assert client.get(route, headers=OUTSIDER).status_code == 404
     assert client.get(route, headers=DISPATCHER).json()["stale"] is False
@@ -93,3 +96,32 @@ def test_suggestion_is_scoped_and_dispatch_review_is_audited(monkeypatch, tmp_pa
     }
     assert client.post("/reports/report-1/dispatch", headers=DISPATCHER, json=dispatch).status_code == 409
     assert any(base == config.INSIGHT_URL for base, _, _ in calls)
+
+
+def test_unknown_text_routes_to_manual_intake(monkeypatch):
+    record = {"id": "report-unknown", "updated_at": "2026-11-01T00:00:00+00:00"}
+    visible = {"id": "report-unknown", "title": "xyzzy plugh qwerty",
+               "description": "xyzzy plugh qwerty", "address": "", "state": "submitted",
+               "assigned_unit": None}
+
+    async def get_record(*_):
+        return record
+
+    async def get_visible(*_):
+        return [visible]
+
+    async def fake_insight(_base, _path, _identity, _method, *, json_body):
+        labels = json_body["labels"]
+        return {"ranked_labels": [{"label": label, "score": round(1 / len(labels), 4)}
+                                  for label in labels], "signals": [], "similar": [],
+                "model_version": "multinomial-nb-bow-v1"}
+
+    monkeypatch.setattr(triage_service, "get_report_record", get_record)
+    monkeypatch.setattr(triage_service, "visible_report_views", get_visible)
+    monkeypatch.setattr(core_client, "core_json", fake_insight)
+    monkeypatch.setattr(triage_service, "save_triage_suggestion",
+                        lambda _identity, _report_id, _updated, analysis: analysis)
+    result = asyncio.run(triage_service.generate_suggestion(
+        "report-unknown", Caller("dispatcher-1", "tenant-1", frozenset({"reports_dispatcher"}))))
+    assert result["suggested_unit"] == "intake"
+    assert result["urgency"] == "normal"

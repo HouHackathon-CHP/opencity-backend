@@ -198,6 +198,10 @@ async def dispatch_report(report_id: str, body: DispatchInput, identity: Caller 
     with closing(report_db()) as connection:
         with connection:
             connection.execute("BEGIN IMMEDIATE")
+            if suggestion is not None and connection.execute(
+                "SELECT 1 FROM triage_reviews WHERE suggestion_id = ?", (suggestion["id"],)
+            ).fetchone():
+                raise HTTPException(status_code=409, detail="Triage suggestion has already been reviewed")
             previous = connection.execute(
                 "SELECT unit_id FROM report_assignments WHERE report_id = ? AND tenant = ?",
                 (report_id, identity.tenant),

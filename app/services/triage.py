@@ -67,6 +67,8 @@ async def generate_suggestion(report_id: str, identity: Caller) -> dict:
     if (not isinstance(ranked, list) or not ranked or
             ranked[0].get("label") not in config.VALID_UNITS):
         raise HTTPException(status_code=502, detail="Insight service returned an invalid unit")
+    if not analysis.get("signals"):
+        analysis["suggested_unit"] = "intake"
     urgency = await core_client.core_json(
         config.INSIGHT_URL, "/analyze", identity, "POST",
         json_body={
@@ -79,7 +81,7 @@ async def generate_suggestion(report_id: str, identity: Caller) -> dict:
     if (not isinstance(urgency_ranked, list) or not urgency_ranked or
             urgency_ranked[0].get("label") not in {"high", "normal", "low"}):
         raise HTTPException(status_code=502, detail="Insight service returned an invalid urgency")
-    analysis["urgency"] = urgency_ranked[0]["label"]
+    analysis["urgency"] = urgency_ranked[0]["label"] if urgency.get("signals") else "normal"
     analysis["urgency_ranked"] = urgency_ranked
     return save_triage_suggestion(identity, report_id, record["updated_at"], analysis)
 
