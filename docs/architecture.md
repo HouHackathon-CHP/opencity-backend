@@ -29,16 +29,18 @@ app/
     appointments.py         Slot, request and decision models
   services/
     reports.py              Report visibility, views and SLA aggregation
+    triage.py               Tenant-scoped examples and insight integration
     notifications.py        Recipients, read views and deadline reminders
     appointments.py         Appointment rules and transactions
   repositories/
-    reports.py              Local routing, audit and inbox SQLite tables
+    reports.py              Local routing, audit, triage and inbox SQLite tables
     bulletins.py            Bulletin SQLite table and view
     surveys.py              Survey SQLite tables, lookup and result view
     appointments.py         Appointment slot and request SQLite tables
 tests/
   test_api.py               API behavior, permissions and tenant isolation
   test_appointments.py      Role, tenant and capacity rules for appointments
+  test_triage.py            Suggestion scope and human dispatch review
 scripts/                    Demo provisioning, smoke and license checks
 ```
 

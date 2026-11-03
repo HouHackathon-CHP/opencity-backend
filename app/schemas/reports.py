@@ -9,6 +9,7 @@ class DispatchInput(BaseModel):
     unit_id: Literal["infrastructure", "environment", "transport", "intake"]
     due_at: datetime
     note: str = Field(min_length=3, max_length=500)
+    suggestion_id: str | None = Field(default=None, min_length=36, max_length=36)
 
 
 class TransferInput(BaseModel):

@@ -9,7 +9,11 @@ from app.core import config, core_client
 from app.core.security import Caller, caller, can_dispatch, require_manager
 from app.services.notifications import add_notification
 from app.schemas.reports import DispatchInput, TransferInput, NoteInput
-from app.repositories.reports import report_db, routing_for, add_report_event
+from app.repositories.reports import (
+    report_db, routing_for, add_report_event, triage_suggestion_for,
+    save_triage_review, triage_metrics,
+)
+from app.services import triage as triage_service
 from app.services.reports import (
     matches_image_type, report_view, report_view_with_routing, get_report_record,
     find_instance, visible_report_views, report_dashboard,
@@ -27,6 +31,13 @@ async def list_reports(identity: Caller = Depends(caller)) -> list[dict]:
 async def get_reports_dashboard(identity: Caller = Depends(caller)) -> dict:
     require_manager(identity, "reports")
     return report_dashboard(await visible_report_views(identity), datetime.now(timezone.utc))
+
+
+@router.get("/reports/triage-metrics")
+def get_triage_metrics(identity: Caller = Depends(caller)) -> dict:
+    if not can_dispatch(identity):
+        raise HTTPException(status_code=403, detail="reports_dispatcher role required")
+    return triage_metrics(identity.tenant)
 
 
 @router.post("/reports", status_code=201)
@@ -105,6 +116,20 @@ async def get_report(report_id: str, identity: Caller = Depends(caller)) -> dict
     return report_view_with_routing(record, instance, routing_for(report_id, identity.tenant))
 
 
+@router.get("/reports/{report_id}/triage-suggestion")
+async def get_triage_suggestion(report_id: str, identity: Caller = Depends(caller)) -> dict:
+    if not can_dispatch(identity):
+        raise HTTPException(status_code=403, detail="reports_dispatcher role required")
+    return await triage_service.latest_suggestion(report_id, identity)
+
+
+@router.post("/reports/{report_id}/triage-suggestion", status_code=201)
+async def generate_triage_suggestion(report_id: str, identity: Caller = Depends(caller)) -> dict:
+    if not can_dispatch(identity):
+        raise HTTPException(status_code=403, detail="reports_dispatcher role required")
+    return await triage_service.generate_suggestion(report_id, identity)
+
+
 @router.post("/reports/{report_id}/retry-workflow")
 async def retry_workflow(report_id: str, identity: Caller = Depends(caller)) -> dict:
     record = await get_report_record(report_id, identity)
@@ -151,6 +176,15 @@ async def dispatch_report(report_id: str, body: DispatchInput, identity: Caller 
     if len(note) < 3:
         raise HTTPException(status_code=422, detail="Dispatch note is required")
     record = await get_report_record(report_id, identity)
+    suggestion = None
+    if body.suggestion_id:
+        suggestion = triage_suggestion_for(identity.tenant, report_id, body.suggestion_id)
+        if suggestion is None:
+            raise HTTPException(status_code=404, detail="Triage suggestion not found")
+        if suggestion["reviewed_unit"] is not None:
+            raise HTTPException(status_code=409, detail="Triage suggestion has already been reviewed")
+        if suggestion["source_updated_at"] != record["updated_at"]:
+            raise HTTPException(status_code=409, detail="Triage suggestion is stale")
     instance = await find_instance(report_id, identity)
     if instance is None:
         raise HTTPException(status_code=409, detail="Report workflow has not started")
@@ -182,6 +216,8 @@ async def dispatch_report(report_id: str, body: DispatchInput, identity: Caller 
                              "reassigned" if previous else "assigned",
                              from_unit=previous["unit_id"] if previous else None,
                              to_unit=body.unit_id, note=note)
+            if suggestion is not None:
+                save_triage_review(connection, suggestion, body.unit_id, identity)
             add_notification(connection, identity.tenant, report_id, "unit", body.unit_id,
                              "reassigned" if previous else "assigned", "Hồ sơ được giao xử lý",
                              f"Hồ sơ #{report_id[:8]} đã được giao cho đơn vị của bạn.")
