@@ -18,6 +18,7 @@ DX-OS integration. See
 - Store report notifications for citizens, assigned units and dispatchers, with per-user read state and idempotent deadline reminders.
 - Publish tenant-scoped news and alerts for citizen apps. Only `bulletins_operator` or `admin` can publish; all authenticated members of that tenant can read.
 - Run tenant-scoped, single-choice surveys. `surveys_operator` or `admin` can publish and close them; each account can answer once.
+- Manage local citizen reception appointments: `appointments_operator` publishes future slots and confirms or rejects requests; citizens request and cancel their own appointments. Confirmations respect per-slot capacity.
 - Summarize visible reports for the staff SLA dashboard: state counts, unassigned cases, next-24-hour deadlines, overdue cases, unit workload and a priority queue. The API applies the same report visibility rules before aggregating.
 
 ## Local stack
@@ -33,7 +34,7 @@ python scripts\seed_dashboard_demo.py
 
 The first command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail.
 
-Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, and `dxos-surveys`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all three features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
+Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, `dxos-surveys`, and `dxos-appointments`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all four management features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
 
 `GET /me/capabilities` returns management features, report unit and dispatcher capability. Citizens see their own reports; dispatchers see all reports in their tenant; unit handlers see only reports explicitly assigned to their unit. The category suggests an initial unit (`Hạ tầng`/`Chiếu sáng` → `infrastructure`; `Môi trường`/`Cây xanh` → `environment`; `Giao thông` → `transport`; `Khác` → `intake`), but does not grant that unit access. Existing reports without a saved assignment appear in the dispatcher inbox until dispatched. The backend checks unit scope again on details, attachments, workflow retry and actions. The web hides unauthorized routes, while API checks remain authoritative.
 
@@ -66,6 +67,10 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 | `POST` | `/surveys` | Publish a survey with 2–8 options (`surveys_operator`) |
 | `POST` | `/surveys/{id}/answers` | Answer once with an option ID |
 | `POST` | `/surveys/{id}/close` | Close a survey (`surveys_operator`) |
+| `GET`, `POST` | `/appointments/slots` | Browse or publish future citizen reception slots |
+| `GET`, `POST` | `/appointments` | List visible requests or submit one |
+| `POST` | `/appointments/{id}/decision` | Confirm or reject (`appointments_operator`) |
+| `POST` | `/appointments/{id}/cancel` | Cancel one's own pending or confirmed request |
 
 The gateway prefixes these with `/api/opencity`.
 
@@ -74,6 +79,8 @@ The gateway prefixes these with `/api/opencity`.
 Bulletins use a separate persistent SQLite volume in the local Compose stack. They are entered by an operator; no official news feed is bundled. `POST /bulletins` accepts `category` (`news` or `alert`), `title`, `summary`, `body`, and optional `area`, `latitude`, `longitude`. The smoke script inserts one clearly marked `[DEMO]` alert if it is absent, so the mobile map and feed can be tested.
 
 Surveys use a separate SQLite file in that persistent volume. The API enforces one answer per user and validates that the chosen option belongs to the survey. Citizens see vote totals only after they answer or the survey closes; operators see totals while it is open. `smoke_app.py` seeds one `[DEMO]` survey without submitting an answer for the citizen account.
+
+Citizen reception appointments use `appointments.sqlite3` in the same persistent volume. `smoke_app.py` opens a clearly marked `[DEMO]` slot for local testing. These appointments exist only in OpenCity; they are not reservations in an official government service. The separate "Đặt lịch thực hiện DVC" catalog connector stays unavailable until a provider integration exists.
 
 ## Development
 

@@ -17,6 +17,7 @@ app/
       notifications.py      Inbox HTTP endpoints
       bulletins.py          News and alert HTTP endpoints
       surveys.py            Survey HTTP endpoints
+      appointments.py       Citizen reception appointment HTTP endpoints
   core/
     config.py               Environment settings and shared constants
     security.py             Gateway identity and feature permissions
@@ -25,15 +26,19 @@ app/
     reports.py              Dispatch, transfer and note request models
     bulletins.py            Publication request model
     surveys.py              Publication and answer request models
+    appointments.py         Slot, request and decision models
   services/
     reports.py              Report visibility, views and SLA aggregation
     notifications.py        Recipients, read views and deadline reminders
+    appointments.py         Appointment rules and transactions
   repositories/
     reports.py              Local routing, audit and inbox SQLite tables
     bulletins.py            Bulletin SQLite table and view
     surveys.py              Survey SQLite tables, lookup and result view
+    appointments.py         Appointment slot and request SQLite tables
 tests/
   test_api.py               API behavior, permissions and tenant isolation
+  test_appointments.py      Role, tenant and capacity rules for appointments
 scripts/                    Demo provisioning, smoke and license checks
 ```
 

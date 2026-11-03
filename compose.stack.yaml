@@ -16,6 +16,7 @@ services:
       NEWS_DB_PATH: /service/data/bulletins.sqlite3
       SURVEY_DB_PATH: /service/data/surveys.sqlite3
       REPORT_DB_PATH: /service/data/report-routing.sqlite3
+      APPOINTMENT_DB_PATH: /service/data/appointments.sqlite3
     depends_on:
       - data
       - workflow

@@ -16,6 +16,7 @@ ROLES = {
     "dxos-reports-environment": "reports_operator",
     "dxos-bulletins": "bulletins_operator",
     "dxos-surveys": "surveys_operator",
+    "dxos-appointments": "appointments_operator",
 }
 REPORT_UNITS = {
     "dxos-reports": "infrastructure",

@@ -78,6 +78,7 @@ def main():
     environment_operator = token("dxos-reports-environment", values["DEMO_OPERATOR_PASSWORD"])
     bulletins_operator = token("dxos-bulletins", values["DEMO_OPERATOR_PASSWORD"])
     surveys_operator = token("dxos-surveys", values["DEMO_OPERATOR_PASSWORD"])
+    appointments_operator = token("dxos-appointments", values["DEMO_OPERATOR_PASSWORD"])
     outsider = token("dxos-outsider", values["DEMO_OUTSIDER_PASSWORD"])
     status, result = send("GET", f"{GATEWAY}/api/opencity/reports")
     require(status, 401, result)  # no token
@@ -85,7 +86,8 @@ def main():
                                                  (reports_operator, ["reports"], "infrastructure", False),
                                                  (environment_operator, ["reports"], "environment", False),
                                                  (bulletins_operator, ["bulletins"], None, False),
-                                                 (surveys_operator, ["surveys"], None, False)):
+                                                 (surveys_operator, ["surveys"], None, False),
+                                                 (appointments_operator, ["appointments"], None, False)):
         status, capabilities = send("GET", f"{GATEWAY}/api/opencity/me/capabilities", token=user_token)
         require(status, 200, capabilities)
         assert capabilities["management"] == expected
@@ -251,7 +253,27 @@ def main():
     status, detail = send("GET", f"{GATEWAY}/api/opencity/surveys/{survey_id}", token=citizen)
     require(status, 200, detail)
     assert detail["status"] == "open" and len(detail["options"]) == 3
-    print("OpenCity smoke passed: reports, notifications, images, workflows, bulletins, surveys, roles and tenants.")
+    status, slots = send("GET", f"{GATEWAY}/api/opencity/appointments/slots", token=citizen)
+    require(status, 200, slots)
+    demo_location = "[DEMO] Phòng tiếp công dân OpenCity"
+    demo_slot = next((item for item in slots if item["location"] == demo_location), None)
+    if demo_slot is None:
+        start = datetime.now(timezone.utc) + timedelta(days=2)
+        sample_slot = {
+            "starts_at": start.isoformat(), "ends_at": (start + timedelta(minutes=30)).isoformat(),
+            "location": demo_location, "capacity": 3,
+        }
+        status, denied = send("POST", f"{GATEWAY}/api/opencity/appointments/slots", token=citizen,
+                              body=json.dumps(sample_slot).encode(), content_type="application/json")
+        require(status, 403, denied)
+        status, demo_slot = send("POST", f"{GATEWAY}/api/opencity/appointments/slots",
+                                 token=appointments_operator, body=json.dumps(sample_slot).encode(),
+                                 content_type="application/json")
+        require(status, 201, demo_slot)
+    status, outsider_slots = send("GET", f"{GATEWAY}/api/opencity/appointments/slots", token=outsider)
+    require(status, 200, outsider_slots)
+    assert not any(item["id"] == demo_slot["id"] for item in outsider_slots)
+    print("OpenCity smoke passed: reports, notifications, images, workflows, bulletins, surveys, appointments, roles and tenants.")
 
 
 if __name__ == "__main__":
