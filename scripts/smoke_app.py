@@ -80,6 +80,7 @@ def main():
     surveys_operator = token("dxos-surveys", values["DEMO_OPERATOR_PASSWORD"])
     appointments_operator = token("dxos-appointments", values["DEMO_OPERATOR_PASSWORD"])
     business_operator = token("dxos-business-feedback", values["DEMO_OPERATOR_PASSWORD"])
+    hotlines_operator = token("dxos-hotlines", values["DEMO_OPERATOR_PASSWORD"])
     outsider = token("dxos-outsider", values["DEMO_OUTSIDER_PASSWORD"])
     status, result = send("GET", f"{GATEWAY}/api/opencity/reports")
     require(status, 401, result)  # no token
@@ -89,7 +90,8 @@ def main():
                                                  (bulletins_operator, ["bulletins"], None, False),
                                                  (surveys_operator, ["surveys"], None, False),
                                                  (appointments_operator, ["appointments"], None, False),
-                                                 (business_operator, ["business_feedback"], None, False)):
+                                                 (business_operator, ["business_feedback"], None, False),
+                                                 (hotlines_operator, ["hotlines"], None, False)):
         status, capabilities = send("GET", f"{GATEWAY}/api/opencity/me/capabilities", token=user_token)
         require(status, 200, capabilities)
         assert capabilities["management"] == expected
@@ -275,7 +277,22 @@ def main():
     status, outsider_slots = send("GET", f"{GATEWAY}/api/opencity/appointments/slots", token=outsider)
     require(status, 200, outsider_slots)
     assert not any(item["id"] == demo_slot["id"] for item in outsider_slots)
-    print("OpenCity smoke passed: reports, notifications, images, workflows, bulletins, surveys, appointments, roles and tenants.")
+    status, hotlines = send("GET", f"{GATEWAY}/api/opencity/hotlines", token=hotlines_operator)
+    require(status, 200, hotlines)
+    demo_name = "[DEMO] Hỗ trợ OpenCity"
+    if not any(item["name"] == demo_name for item in hotlines):
+        sample_hotline = {"name": demo_name, "unit": "Nhóm thử nghiệm OpenCity",
+                          "phone": "0000000000", "area": "Môi trường thử nghiệm",
+                          "hours": "Không trực", "description": "Số giả lập, không gọi.",
+                          "active": True}
+        status, denied = post_json(f"{GATEWAY}/api/opencity/hotlines", citizen, sample_hotline)
+        require(status, 403, denied)
+        status, created_hotline = post_json(f"{GATEWAY}/api/opencity/hotlines", hotlines_operator, sample_hotline)
+        require(status, 201, created_hotline)
+        status, hidden = send("GET", f"{GATEWAY}/api/opencity/hotlines", token=outsider)
+        require(status, 200, hidden)
+        assert not any(item["id"] == created_hotline["id"] for item in hidden)
+    print("OpenCity smoke passed: reports, notifications, images, workflows, bulletins, surveys, appointments, hotlines, roles and tenants.")
 
 
 if __name__ == "__main__":
