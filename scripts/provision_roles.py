@@ -21,6 +21,7 @@ ROLES = {
     "dxos-business-feedback": "business_feedback_operator",
     "dxos-hotlines": "hotlines_operator",
     "dxos-communications": "communications_operator",
+    "dxos-community": "community_groups_operator",
 }
 REPORT_UNITS = {
     "dxos-reports": "infrastructure",
