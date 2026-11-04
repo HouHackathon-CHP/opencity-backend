@@ -30,6 +30,7 @@ def test_admin_overview_requires_role_and_scopes_tenant(monkeypatch, tmp_path):
         ("SURVEY_DB_PATH", "surveys.db"),
         ("HOTLINES_DB_PATH", "hotlines.db"),
         ("COMMUNITY_DB_PATH", "community.db"),
+        ("SOCIAL_FEEDBACK_DB_PATH", "social-feedback.db"),
     ):
         monkeypatch.setattr(config, key, str(tmp_path / filename))
 
@@ -53,6 +54,7 @@ def test_admin_overview_requires_role_and_scopes_tenant(monkeypatch, tmp_path):
     assert result.json()["appointments"]["total"] == 0
     assert result.json()["hotlines"] == {"total": 1, "breakdown": {"1": 1}}
     assert result.json()["community_groups"]["total"] == 0
+    assert result.json()["social_feedback"]["total"] == 0
     other = client.get("/admin/overview", headers={**admin, "X-DXOS-Tenant": "tenant-two"})
     assert other.status_code == 200
     assert other.json()["business_feedback"]["total"] == 0

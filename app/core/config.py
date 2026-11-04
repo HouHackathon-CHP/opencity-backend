@@ -25,6 +25,7 @@ MANAGEMENT_ROLES = {
     "hotlines": "hotlines_operator",
     "communications": "communications_operator",
     "community_groups": "community_groups_operator",
+    "social_feedback": "social_feedback_operator",
 }
 NEWS_DB_PATH = os.getenv("NEWS_DB_PATH", "data/bulletins.sqlite3")
 SURVEY_DB_PATH = os.getenv("SURVEY_DB_PATH", "data/surveys.sqlite3")
@@ -34,4 +35,5 @@ ADMIN_FEEDBACK_DB_PATH = os.getenv("ADMIN_FEEDBACK_DB_PATH", "data/administrativ
 BUSINESS_FEEDBACK_DB_PATH = os.getenv("BUSINESS_FEEDBACK_DB_PATH", "data/business-feedback.sqlite3")
 HOTLINES_DB_PATH = os.getenv("HOTLINES_DB_PATH", "data/hotlines.sqlite3")
 COMMUNITY_DB_PATH = os.getenv("COMMUNITY_DB_PATH", "data/community.sqlite3")
+SOCIAL_FEEDBACK_DB_PATH = os.getenv("SOCIAL_FEEDBACK_DB_PATH", "data/social-feedback.sqlite3")
 VALID_UNITS = frozenset(REPORT_UNITS.values())
