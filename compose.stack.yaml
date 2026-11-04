@@ -20,6 +20,7 @@ services:
       APPOINTMENT_DB_PATH: /service/data/appointments.sqlite3
       ADMIN_FEEDBACK_DB_PATH: /service/data/administrative-feedback.sqlite3
       BUSINESS_FEEDBACK_DB_PATH: /service/data/business-feedback.sqlite3
+      HOTLINES_DB_PATH: /service/data/hotlines.sqlite3
     depends_on:
       - data
       - workflow

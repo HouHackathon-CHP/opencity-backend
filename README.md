@@ -23,7 +23,8 @@ DX-OS integration. See
 - Receive business petitions with a self-declared company name, tax code and representative. `business_feedback_operator` may review, request information and answer petitions in its tenant; the submitter may provide information, request another review or close the case. The prototype does not verify tax codes against an official registry.
 - Summarize visible reports for the staff SLA dashboard: state counts, unassigned cases, next-24-hour deadlines, overdue cases, unit workload and a priority queue. The API applies the same report visibility rules before aggregating.
 - Offer dispatcher-only, human-reviewed text triage: suggest a unit and attention level, surface similar reports, and record whether the final unit matched the suggestion. It does not auto-dispatch or interpret images.
-- Give `admin` an operational overview with tenant-scoped totals for reports, appointments, feedback, bulletins and surveys. Account and role management remains in Keycloak.
+- Give `admin` an operational overview with tenant-scoped totals for reports, appointments, feedback, bulletins, surveys and hotlines. Account and role management remains in Keycloak.
+- Maintain a tenant-scoped hotline directory: `hotlines_operator` or `admin` can publish, edit and hide contact entries; citizens see only active entries. Tapping a number in the Android app opens the phone dialer.
 
 ## Local stack
 
@@ -39,7 +40,7 @@ The core smoke script provisions the base demo citizen and checks Keycloak, gate
 
 The Compose command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail. Start the [web frontend](https://github.com/HouHackathon-CHP/opencity-frontend) or [Android app](https://github.com/HouHackathon-CHP/opencity-mobile) separately using its README.
 
-Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, `dxos-surveys`, `dxos-appointments`, `dxos-administrative-feedback`, and `dxos-business-feedback`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all management features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
+Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, `dxos-surveys`, `dxos-appointments`, `dxos-administrative-feedback`, `dxos-business-feedback`, and `dxos-hotlines`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all management features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
 
 `GET /me/capabilities` returns management features, report unit and dispatcher capability. Citizens see their own reports; dispatchers see all reports in their tenant; unit handlers see only reports explicitly assigned to their unit. The category suggests an initial unit (`Hạ tầng`/`Chiếu sáng` → `infrastructure`; `Môi trường`/`Cây xanh` → `environment`; `Giao thông` → `transport`; `Khác` → `intake`), but does not grant that unit access. Existing reports without a saved assignment appear in the dispatcher inbox until dispatched. The backend checks unit scope again on details, attachments, workflow retry and actions. The web hides unauthorized routes, while API checks remain authoritative.
 
@@ -53,6 +54,8 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 | --- | --- | --- |
 | `GET` | `/me/capabilities` | List the caller's management features |
 | `GET` | `/admin/overview` | Admin-only tenant operations summary |
+| `GET`, `POST` | `/hotlines` | List visible contacts or add one as hotline operator |
+| `PUT` | `/hotlines/{id}` | Update or hide a contact as hotline operator |
 | `GET` | `/notifications` | List visible in-app notices and materialize deadline reminders |
 | `POST` | `/notifications/{id}/read` | Mark a visible notice read for this account |
 | `GET` | `/reports` | List reports visible to the caller |
