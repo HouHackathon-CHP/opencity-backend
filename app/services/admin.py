@@ -8,6 +8,7 @@ from app.repositories.appointments import appointment_db
 from app.repositories.bulletins import bulletin_db
 from app.repositories.business_feedback import petition_db
 from app.repositories.hotlines import hotline_db
+from app.repositories.community import community_db
 from app.repositories.surveys import survey_db
 
 
@@ -32,4 +33,5 @@ def local_counts(tenant: str) -> dict:
         "bulletins": grouped_counts(bulletin_db, "bulletins", "category", tenant),
         "surveys": grouped_counts(survey_db, "surveys", "status", tenant),
         "hotlines": grouped_counts(hotline_db, "hotlines", "active", tenant),
+        "community_groups": grouped_counts(community_db, "community_groups", "area", tenant),
     }
