@@ -17,7 +17,7 @@ router = APIRouter()
 def list_bulletins(identity: Caller = Depends(caller)) -> list[dict]:
     with closing(bulletin_db()) as connection:
         rows = connection.execute(
-            "SELECT * FROM bulletins WHERE tenant = ? ORDER BY published_at DESC, rowid DESC LIMIT 100",
+            "SELECT * FROM bulletins WHERE tenant = ? AND category IN ('news', 'alert') ORDER BY published_at DESC, rowid DESC LIMIT 100",
             (identity.tenant,),
         ).fetchall()
     return [bulletin_view(row) for row in rows]
@@ -27,7 +27,7 @@ def list_bulletins(identity: Caller = Depends(caller)) -> list[dict]:
 def get_bulletin(bulletin_id: str, identity: Caller = Depends(caller)) -> dict:
     with closing(bulletin_db()) as connection:
         row = connection.execute(
-            "SELECT * FROM bulletins WHERE id = ? AND tenant = ?", (bulletin_id, identity.tenant)
+            "SELECT * FROM bulletins WHERE id = ? AND tenant = ? AND category IN ('news', 'alert')", (bulletin_id, identity.tenant)
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Bulletin not found")

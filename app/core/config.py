@@ -23,6 +23,7 @@ MANAGEMENT_ROLES = {
     "surveys": "surveys_operator",
     "appointments": "appointments_operator",
     "hotlines": "hotlines_operator",
+    "communications": "communications_operator",
 }
 NEWS_DB_PATH = os.getenv("NEWS_DB_PATH", "data/bulletins.sqlite3")
 SURVEY_DB_PATH = os.getenv("SURVEY_DB_PATH", "data/surveys.sqlite3")
