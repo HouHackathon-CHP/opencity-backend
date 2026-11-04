@@ -26,16 +26,17 @@ DX-OS integration. See
 
 ## Local stack
 
-Keep `dxos-core`, `opencity-frontend` and `opencity-backend` as sibling directories. From this directory:
+Keep `dxos-core`, `opencity-frontend` and `opencity-backend` as sibling directories. Install Docker Desktop and Python 3.10+, and start the Docker Linux engine. Create `dxos-core/.env` from its `.env.example` if this is a fresh setup, then replace the example secrets; retain an existing `.env` if you already use the stack. From the `opencity-backend` directory:
 
 ```powershell
 docker compose --env-file ..\dxos-core\.env -f ..\dxos-core\compose.yaml -f compose.stack.yaml up --build -d
 python ..\dxos-core\scripts\smoke.py
 python scripts\smoke_app.py
-python scripts\seed_dashboard_demo.py
 ```
 
-The first command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail.
+The core smoke script provisions the base demo citizen and checks Keycloak, gateway, data and workflow. The application smoke script provisions OpenCity operator accounts, checks feature APIs and seeds small `[DEMO]` fixtures. For a varied report map and SLA dashboard, optionally run `python scripts\seed_dashboard_demo.py` once. All three scripts can be rerun.
+
+The Compose command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail. Start the [web frontend](https://github.com/HouHackathon-CHP/opencity-frontend) or [Android app](https://github.com/HouHackathon-CHP/opencity-mobile) separately using its README.
 
 Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, `dxos-surveys`, `dxos-appointments`, `dxos-administrative-feedback`, and `dxos-business-feedback`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all management features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
 
