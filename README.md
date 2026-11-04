@@ -23,6 +23,7 @@ DX-OS integration. See
 - Receive business petitions with a self-declared company name, tax code and representative. `business_feedback_operator` may review, request information and answer petitions in its tenant; the submitter may provide information, request another review or close the case. The prototype does not verify tax codes against an official registry.
 - Summarize visible reports for the staff SLA dashboard: state counts, unassigned cases, next-24-hour deadlines, overdue cases, unit workload and a priority queue. The API applies the same report visibility rules before aggregating.
 - Offer dispatcher-only, human-reviewed text triage: suggest a unit and attention level, surface similar reports, and record whether the final unit matched the suggestion. It does not auto-dispatch or interpret images.
+- Give `admin` an operational overview with tenant-scoped totals for reports, appointments, feedback, bulletins and surveys. Account and role management remains in Keycloak.
 
 ## Local stack
 
@@ -51,6 +52,7 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/me/capabilities` | List the caller's management features |
+| `GET` | `/admin/overview` | Admin-only tenant operations summary |
 | `GET` | `/notifications` | List visible in-app notices and materialize deadline reminders |
 | `POST` | `/notifications/{id}/read` | Mark a visible notice read for this account |
 | `GET` | `/reports` | List reports visible to the caller |
