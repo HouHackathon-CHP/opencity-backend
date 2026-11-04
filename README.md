@@ -19,6 +19,7 @@ DX-OS integration. See
 - Publish tenant-scoped news and alerts for citizen apps. Only `bulletins_operator` or `admin` can publish; all authenticated members of that tenant can read.
 - Run tenant-scoped, single-choice surveys. `surveys_operator` or `admin` can publish and close them; each account can answer once.
 - Manage local citizen reception appointments: `appointments_operator` publishes future slots and confirms or rejects requests; citizens request and cancel their own appointments. Confirmations respect per-slot capacity.
+- Receive administrative-procedure feedback in a separate module: citizens submit and follow their own cases; `administrative_feedback_operator` reviews and answers cases in its tenant; citizens may ask for clarification or close an answered case. Every transition is recorded.
 - Summarize visible reports for the staff SLA dashboard: state counts, unassigned cases, next-24-hour deadlines, overdue cases, unit workload and a priority queue. The API applies the same report visibility rules before aggregating.
 - Offer dispatcher-only, human-reviewed text triage: suggest a unit and attention level, surface similar reports, and record whether the final unit matched the suggestion. It does not auto-dispatch or interpret images.
 
@@ -35,7 +36,7 @@ python scripts\seed_dashboard_demo.py
 
 The first command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail.
 
-Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, `dxos-surveys`, and `dxos-appointments`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all four management features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
+Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, `dxos-surveys`, `dxos-appointments`, and `dxos-administrative-feedback`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all management features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
 
 `GET /me/capabilities` returns management features, report unit and dispatcher capability. Citizens see their own reports; dispatchers see all reports in their tenant; unit handlers see only reports explicitly assigned to their unit. The category suggests an initial unit (`Hạ tầng`/`Chiếu sáng` → `infrastructure`; `Môi trường`/`Cây xanh` → `environment`; `Giao thông` → `transport`; `Khác` → `intake`), but does not grant that unit access. Existing reports without a saved assignment appear in the dispatcher inbox until dispatched. The backend checks unit scope again on details, attachments, workflow retry and actions. The web hides unauthorized routes, while API checks remain authoritative.
 
@@ -72,6 +73,12 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 | `POST` | `/surveys/{id}/close` | Close a survey (`surveys_operator`) |
 | `GET`, `POST` | `/appointments/slots` | Browse or publish future citizen reception slots |
 | `GET`, `POST` | `/appointments` | List visible requests or submit one |
+| `GET`, `POST` | `/administrative-feedback` | List visible procedure feedback or submit one |
+| `GET` | `/administrative-feedback/{id}` | Read an owned or operator-visible case with history |
+| `POST` | `/administrative-feedback/{id}/review` | Operator starts review |
+| `POST` | `/administrative-feedback/{id}/answer` | Operator posts a public answer |
+| `POST` | `/administrative-feedback/{id}/clarification` | Citizen asks for clarification |
+| `POST` | `/administrative-feedback/{id}/close` | Citizen closes an answered case |
 | `POST` | `/appointments/{id}/decision` | Confirm or reject (`appointments_operator`) |
 | `POST` | `/appointments/{id}/cancel` | Cancel one's own pending or confirmed request |
 
