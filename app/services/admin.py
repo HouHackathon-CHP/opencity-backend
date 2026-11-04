@@ -10,6 +10,7 @@ from app.repositories.business_feedback import petition_db
 from app.repositories.hotlines import hotline_db
 from app.repositories.community import community_db
 from app.repositories.social_feedback import social_feedback_db
+from app.repositories.digital_ward import ward_db
 from app.repositories.surveys import survey_db
 
 
@@ -36,4 +37,5 @@ def local_counts(tenant: str) -> dict:
         "hotlines": grouped_counts(hotline_db, "hotlines", "active", tenant),
         "community_groups": grouped_counts(community_db, "community_groups", "area", tenant),
         "social_feedback": grouped_counts(social_feedback_db, "consultation_topics", "status", tenant),
+        "digital_ward": grouped_counts(ward_db, "digital_wards", "active", tenant),
     }

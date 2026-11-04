@@ -48,6 +48,17 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 
 `GET /notifications` returns the 100 latest in-app notices visible to the caller. New reports notify dispatchers; dispatch and workflow updates notify the citizen and relevant staff. Unit notices stop being visible when a report moves away from that unit. `POST /notifications/{id}/read` marks a notice read for the current account only. Listing also creates deduplicated reminders for cases due within 24 hours or already overdue. This is an in-app inbox, not an OS push service or a background scheduler; reminders are materialized when a signed-in client polls the API.
 
+The newer local feature roles are `hotlines_operator`, `communications_operator`,
+`community_groups_operator`, `social_feedback_operator`, and `digital_ward_operator`.
+Run `python scripts/provision_roles.py` after updating the backend to create their demo accounts.
+Each feature has a separate tenant-scoped API and web management page. The Android app is citizen-facing.
+Community posts are visible to joined members and community operators. Consultation opinions
+are private to their author and the consultation operator. Digital ward profiles must be
+entered by an operator; no official ward directory or contact details are bundled.
+After the local stack starts and roles are provisioned, run
+`.venv\Scripts\python scripts\smoke_new_features.py` to verify the five new APIs
+through Keycloak and the DX-OS gateway. It reuses clearly marked demo records.
+
 ### Routes
 
 | Method | Route | Purpose |

@@ -21,6 +21,9 @@ services:
       ADMIN_FEEDBACK_DB_PATH: /service/data/administrative-feedback.sqlite3
       BUSINESS_FEEDBACK_DB_PATH: /service/data/business-feedback.sqlite3
       HOTLINES_DB_PATH: /service/data/hotlines.sqlite3
+      COMMUNITY_DB_PATH: /service/data/community.sqlite3
+      SOCIAL_FEEDBACK_DB_PATH: /service/data/social-feedback.sqlite3
+      DIGITAL_WARD_DB_PATH: /service/data/digital-ward.sqlite3
     depends_on:
       - data
       - workflow
