@@ -3,7 +3,7 @@
 
 from fastapi import APIRouter
 
-from app.api.routes import admin, administrative_feedback, appointments, bulletins, business_feedback, hotlines, notifications, reports, surveys, system
+from app.api.routes import admin, administrative_feedback, appointments, bulletins, business_feedback, communications, hotlines, notifications, reports, surveys, system
 
 
 api_router = APIRouter()
@@ -11,6 +11,7 @@ api_router.include_router(system.router)
 api_router.include_router(admin.router)
 api_router.include_router(notifications.router)
 api_router.include_router(bulletins.router)
+api_router.include_router(communications.router)
 api_router.include_router(surveys.router)
 api_router.include_router(appointments.router)
 api_router.include_router(administrative_feedback.router)

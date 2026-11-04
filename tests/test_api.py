@@ -116,7 +116,7 @@ def test_feature_roles_are_isolated():
     assert client.get("/me/capabilities", headers=LEGACY_OPERATOR).json() == {
         "management": [], "report_unit": None, "report_dispatcher": False}
     assert client.get("/me/capabilities", headers={**CITIZEN, "X-DXOS-Roles": "admin"}).json() == {
-            "management": ["reports", "administrative_feedback", "business_feedback", "bulletins", "surveys", "appointments", "hotlines"], "report_unit": None,
+            "management": ["reports", "administrative_feedback", "business_feedback", "bulletins", "surveys", "appointments", "hotlines", "communications"], "report_unit": None,
         "report_dispatcher": True}
     assert client.get("/me/capabilities", headers={**REPORTS_OPERATOR, "X-DXOS-Unit": ""}).json() == {
         "management": [], "report_unit": None, "report_dispatcher": False}
