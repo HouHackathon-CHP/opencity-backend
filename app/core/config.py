@@ -17,6 +17,7 @@ REPORT_UNITS = {
 }
 MANAGEMENT_ROLES = {
     "reports": "reports_operator",
+    "administrative_feedback": "administrative_feedback_operator",
     "bulletins": "bulletins_operator",
     "surveys": "surveys_operator",
     "appointments": "appointments_operator",
@@ -25,4 +26,5 @@ NEWS_DB_PATH = os.getenv("NEWS_DB_PATH", "data/bulletins.sqlite3")
 SURVEY_DB_PATH = os.getenv("SURVEY_DB_PATH", "data/surveys.sqlite3")
 REPORT_DB_PATH = os.getenv("REPORT_DB_PATH", "data/report-routing.sqlite3")
 APPOINTMENT_DB_PATH = os.getenv("APPOINTMENT_DB_PATH", "data/appointments.sqlite3")
+ADMIN_FEEDBACK_DB_PATH = os.getenv("ADMIN_FEEDBACK_DB_PATH", "data/administrative-feedback.sqlite3")
 VALID_UNITS = frozenset(REPORT_UNITS.values())
