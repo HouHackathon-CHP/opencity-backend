@@ -19,6 +19,7 @@ services:
       REPORT_DB_PATH: /service/data/report-routing.sqlite3
       APPOINTMENT_DB_PATH: /service/data/appointments.sqlite3
       ADMIN_FEEDBACK_DB_PATH: /service/data/administrative-feedback.sqlite3
+      BUSINESS_FEEDBACK_DB_PATH: /service/data/business-feedback.sqlite3
     depends_on:
       - data
       - workflow

@@ -18,6 +18,7 @@ ROLES = {
     "dxos-surveys": "surveys_operator",
     "dxos-appointments": "appointments_operator",
     "dxos-administrative-feedback": "administrative_feedback_operator",
+    "dxos-business-feedback": "business_feedback_operator",
 }
 REPORT_UNITS = {
     "dxos-reports": "infrastructure",
