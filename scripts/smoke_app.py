@@ -79,6 +79,7 @@ def main():
     bulletins_operator = token("dxos-bulletins", values["DEMO_OPERATOR_PASSWORD"])
     surveys_operator = token("dxos-surveys", values["DEMO_OPERATOR_PASSWORD"])
     appointments_operator = token("dxos-appointments", values["DEMO_OPERATOR_PASSWORD"])
+    business_operator = token("dxos-business-feedback", values["DEMO_OPERATOR_PASSWORD"])
     outsider = token("dxos-outsider", values["DEMO_OUTSIDER_PASSWORD"])
     status, result = send("GET", f"{GATEWAY}/api/opencity/reports")
     require(status, 401, result)  # no token
@@ -87,7 +88,8 @@ def main():
                                                  (environment_operator, ["reports"], "environment", False),
                                                  (bulletins_operator, ["bulletins"], None, False),
                                                  (surveys_operator, ["surveys"], None, False),
-                                                 (appointments_operator, ["appointments"], None, False)):
+                                                 (appointments_operator, ["appointments"], None, False),
+                                                 (business_operator, ["business_feedback"], None, False)):
         status, capabilities = send("GET", f"{GATEWAY}/api/opencity/me/capabilities", token=user_token)
         require(status, 200, capabilities)
         assert capabilities["management"] == expected

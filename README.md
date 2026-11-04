@@ -20,23 +20,25 @@ DX-OS integration. See
 - Run tenant-scoped, single-choice surveys. `surveys_operator` or `admin` can publish and close them; each account can answer once.
 - Manage local citizen reception appointments: `appointments_operator` publishes future slots and confirms or rejects requests; citizens request and cancel their own appointments. Confirmations respect per-slot capacity.
 - Receive administrative-procedure feedback in a separate module: citizens submit and follow their own cases; `administrative_feedback_operator` reviews and answers cases in its tenant; citizens may ask for clarification or close an answered case. Every transition is recorded.
+- Receive business petitions with a self-declared company name, tax code and representative. `business_feedback_operator` may review, request information and answer petitions in its tenant; the submitter may provide information, request another review or close the case. The prototype does not verify tax codes against an official registry.
 - Summarize visible reports for the staff SLA dashboard: state counts, unassigned cases, next-24-hour deadlines, overdue cases, unit workload and a priority queue. The API applies the same report visibility rules before aggregating.
 - Offer dispatcher-only, human-reviewed text triage: suggest a unit and attention level, surface similar reports, and record whether the final unit matched the suggestion. It does not auto-dispatch or interpret images.
 
 ## Local stack
 
-Keep `dxos-core`, `opencity-frontend` and `opencity-backend` as sibling directories. From this directory:
+Keep `dxos-core`, `opencity-frontend` and `opencity-backend` as sibling directories. Install Docker Desktop and Python 3.10+, and start the Docker Linux engine. Create `dxos-core/.env` from its `.env.example` if this is a fresh setup, then replace the example secrets; retain an existing `.env` if you already use the stack. From the `opencity-backend` directory:
 
 ```powershell
 docker compose --env-file ..\dxos-core\.env -f ..\dxos-core\compose.yaml -f compose.stack.yaml up --build -d
 python ..\dxos-core\scripts\smoke.py
 python scripts\smoke_app.py
-python scripts\seed_dashboard_demo.py
 ```
 
-The first command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail.
+The core smoke script provisions the base demo citizen and checks Keycloak, gateway, data and workflow. The application smoke script provisions OpenCity operator accounts, checks feature APIs and seeds small `[DEMO]` fixtures. For a varied report map and SLA dashboard, optionally run `python scripts\seed_dashboard_demo.py` once. All three scripts can be rerun.
 
-Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, `dxos-surveys`, `dxos-appointments`, and `dxos-administrative-feedback`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all management features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
+The Compose command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...` and must carry a valid Keycloak access token. The gateway injects identity headers; direct unauthenticated calls to this backend fail. Start the [web frontend](https://github.com/HouHackathon-CHP/opencity-frontend) or [Android app](https://github.com/HouHackathon-CHP/opencity-mobile) separately using its README.
+
+Run `python scripts/provision_roles.py` after the core smoke script to create local demo staff accounts: `dxos-dispatcher`, `dxos-reports` (infrastructure), `dxos-reports-environment`, `dxos-bulletins`, `dxos-surveys`, `dxos-appointments`, `dxos-administrative-feedback`, and `dxos-business-feedback`. They share the local `DEMO_OPERATOR_PASSWORD` from `dxos-core/.env`. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all management features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
 
 `GET /me/capabilities` returns management features, report unit and dispatcher capability. Citizens see their own reports; dispatchers see all reports in their tenant; unit handlers see only reports explicitly assigned to their unit. The category suggests an initial unit (`Hạ tầng`/`Chiếu sáng` → `infrastructure`; `Môi trường`/`Cây xanh` → `environment`; `Giao thông` → `transport`; `Khác` → `intake`), but does not grant that unit access. Existing reports without a saved assignment appear in the dispatcher inbox until dispatched. The backend checks unit scope again on details, attachments, workflow retry and actions. The web hides unauthorized routes, while API checks remain authoritative.
 
@@ -79,6 +81,14 @@ The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and
 | `POST` | `/administrative-feedback/{id}/answer` | Operator posts a public answer |
 | `POST` | `/administrative-feedback/{id}/clarification` | Citizen asks for clarification |
 | `POST` | `/administrative-feedback/{id}/close` | Citizen closes an answered case |
+| `GET`, `POST` | `/business-feedback` | List visible petitions or submit one |
+| `GET` | `/business-feedback/{id}` | Read an owned or operator-visible petition |
+| `POST` | `/business-feedback/{id}/review` | Operator starts review |
+| `POST` | `/business-feedback/{id}/request-info` | Operator requests more information |
+| `POST` | `/business-feedback/{id}/provide-info` | Submitter provides information |
+| `POST` | `/business-feedback/{id}/resolve` | Operator answers the petition |
+| `POST` | `/business-feedback/{id}/reopen` | Submitter requests another review |
+| `POST` | `/business-feedback/{id}/close` | Submitter closes a resolved petition |
 | `POST` | `/appointments/{id}/decision` | Confirm or reject (`appointments_operator`) |
 | `POST` | `/appointments/{id}/cancel` | Cancel one's own pending or confirmed request |
 
