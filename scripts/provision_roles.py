@@ -18,6 +18,7 @@ ROLES = {
     "dxos-surveys": "surveys_operator",
     "dxos-appointments": "appointments_operator",
     "dxos-administrative-feedback": "administrative_feedback_operator",
+    "dxos-air-quality": "air_quality_operator",
     "dxos-business-feedback": "business_feedback_operator",
     "dxos-hotlines": "hotlines_operator",
     "dxos-communications": "communications_operator",
@@ -56,7 +57,10 @@ def require(status: int, expected: int, detail: object) -> None:
 
 def env_values() -> dict[str, str]:
     values = {}
-    for line in (ROOT / "dxos-core" / ".env").read_text(encoding="utf-8").splitlines():
+    core_env = ROOT / "dxos-core-main" / ".env"
+    if not core_env.exists():
+        core_env = ROOT / "dxos-core" / ".env"
+    for line in core_env.read_text(encoding="utf-8").splitlines():
         if line.strip() and not line.lstrip().startswith("#"):
             key, value = line.split("=", 1)
             values[key] = value

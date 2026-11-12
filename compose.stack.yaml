@@ -19,6 +19,8 @@ services:
       REPORT_DB_PATH: /service/data/report-routing.sqlite3
       APPOINTMENT_DB_PATH: /service/data/appointments.sqlite3
       ADMIN_FEEDBACK_DB_PATH: /service/data/administrative-feedback.sqlite3
+      AIR_QUALITY_DB_PATH: /service/data/air-quality.sqlite3
+      WAQI_API_TOKEN: ${WAQI_API_TOKEN:-}
       BUSINESS_FEEDBACK_DB_PATH: /service/data/business-feedback.sqlite3
       HOTLINES_DB_PATH: /service/data/hotlines.sqlite3
       COMMUNITY_DB_PATH: /service/data/community.sqlite3
