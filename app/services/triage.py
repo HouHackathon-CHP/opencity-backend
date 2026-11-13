@@ -53,7 +53,16 @@ async def generate_suggestion(report_id: str, identity: Caller) -> dict:
     examples = [{"label": unit, "text": text} for unit, text in SEED_EXAMPLES]
     examples.extend({"label": item["assigned_unit"], "text": report_text(item)}
                     for item in others if item["assigned_unit"] in config.VALID_UNITS)
-    candidates = [{"id": item["id"], "text": report_text(item)} for item in others[:150]]
+    candidates = [
+        {
+            "id": item["id"],
+            "text": report_text(item),
+            "latitude": item.get("latitude"),
+            "longitude": item.get("longitude"),
+            "created_at": item.get("created_at"),
+        }
+        for item in others[:150]
+    ]
     analysis = await core_client.core_json(
         config.INSIGHT_URL, "/analyze", identity, "POST",
         json_body={
@@ -61,6 +70,9 @@ async def generate_suggestion(report_id: str, identity: Caller) -> dict:
             "labels": sorted(config.VALID_UNITS),
             "examples": examples[:120],
             "candidates": candidates,
+            "latitude": target.get("latitude"),
+            "longitude": target.get("longitude"),
+            "created_at": target.get("created_at"),
         },
     )
     ranked = analysis.get("ranked_labels")
