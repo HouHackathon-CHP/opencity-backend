@@ -39,3 +39,5 @@ COMMUNITY_DB_PATH = os.getenv("COMMUNITY_DB_PATH", "data/community.sqlite3")
 SOCIAL_FEEDBACK_DB_PATH = os.getenv("SOCIAL_FEEDBACK_DB_PATH", "data/social-feedback.sqlite3")
 DIGITAL_WARD_DB_PATH = os.getenv("DIGITAL_WARD_DB_PATH", "data/digital-ward.sqlite3")
 VALID_UNITS = frozenset(REPORT_UNITS.values())
+AUTO_TRIAGE = os.getenv("AUTO_TRIAGE", "true").lower() in ("true", "1", "yes")
+

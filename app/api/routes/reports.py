@@ -2,7 +2,7 @@
 from contextlib import closing
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.core import config, core_client
@@ -40,8 +40,29 @@ def get_triage_metrics(identity: Caller = Depends(caller)) -> dict:
     return triage_metrics(identity.tenant)
 
 
+async def _run_auto_triage(report_id: str, tenant: str, created_by: str) -> None:
+    suggestion = await triage_service.auto_triage_new_report(report_id, tenant, created_by)
+    if suggestion:
+        urgency = suggestion.get("urgency", "normal")
+        unit = suggestion.get("suggested_unit", "intake")
+        similar = suggestion.get("similar") or []
+        top_duplicate = similar[0] if similar and similar[0].get("similarity", 0) >= 0.75 else None
+
+        detail_msg = f"Hồ sơ #{report_id[:8]} [AI: {unit} | Mức: {urgency}]"
+        if top_duplicate:
+            detail_msg += f" - CẢNH BÁO TRÙNG #{top_duplicate['id'][:8]} ({int(top_duplicate['similarity'] * 100)}%)"
+
+        with closing(report_db()) as connection:
+            with connection:
+                add_notification(
+                    connection, tenant, report_id, "dispatcher", "reports",
+                    "triage_ready", "AI đã tự động phân luồng phản ánh", detail_msg,
+                )
+
+
 @router.post("/reports", status_code=201)
 async def create_report(
+    background_tasks: BackgroundTasks,
     title: str = Form(min_length=5, max_length=120),
     description: str = Form(min_length=15, max_length=2000),
     category: str = Form(),
@@ -104,6 +125,8 @@ async def create_report(
             add_notification(connection, identity.tenant, record["id"], "dispatcher", "reports",
                              "new_report", "Phản ánh mới cần phân công",
                              f"Hồ sơ #{record['id'][:8]} đang chờ chọn đơn vị xử lý.")
+    if config.AUTO_TRIAGE:
+        background_tasks.add_task(_run_auto_triage, record["id"], identity.tenant, identity.user)
     return {**report_view(record, instance), "warnings": warnings}
 
 

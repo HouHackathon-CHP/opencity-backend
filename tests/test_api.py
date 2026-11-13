@@ -339,6 +339,7 @@ def test_spoofed_image_is_rejected_before_core_call(monkeypatch):
 
 def test_create_report_uses_data_and_workflow(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
+    monkeypatch.setattr(config, "AUTO_TRIAGE", False)
     calls = []
 
     async def fake_core(base, path, identity, method="GET", **kwargs):

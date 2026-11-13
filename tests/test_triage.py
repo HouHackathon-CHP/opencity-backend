@@ -125,3 +125,120 @@ def test_unknown_text_routes_to_manual_intake(monkeypatch):
         "report-unknown", Caller("dispatcher-1", "tenant-1", frozenset({"reports_dispatcher"}))))
     assert result["suggested_unit"] == "intake"
     assert result["urgency"] == "normal"
+
+
+def test_create_report_triggers_automatic_ai_triage(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "REPORT_DB_PATH", str(tmp_path / "routing.sqlite3"))
+    monkeypatch.setattr(config, "AUTO_TRIAGE", True)
+
+    created_record = {
+        "id": "report-auto-1",
+        "kind": "field-report",
+        "created_by": "citizen-1",
+        "created_at": "2026-11-01T10:00:00+00:00",
+        "updated_at": "2026-11-01T10:00:00+00:00",
+        "payload": {
+            "title": "Cột điện gãy đổ khẩn cấp",
+            "description": "Cột điện hạ thế bị gãy chắn ngang đường rất nguy hiểm chết người",
+            "category": "Chiếu sáng",
+            "address": "123 Đường Láng, Đống Đa, Hà Nội",
+            "latitude": 21.0123,
+            "longitude": 105.8123,
+        },
+    }
+    existing_duplicate = {
+        "id": "report-dup-99",
+        "kind": "field-report",
+        "created_by": "citizen-2",
+        "created_at": "2026-11-01T09:40:00+00:00",
+        "updated_at": "2026-11-01T09:40:00+00:00",
+        "payload": {
+            "title": "Gãy cột điện nguy hiểm",
+            "description": "Cột điện bị đổ chắn lối đi",
+            "category": "Chiếu sáng",
+            "address": "125 Đường Láng",
+            "latitude": 21.0125,
+            "longitude": 105.8125,
+        },
+    }
+    instance = {
+        "id": "wf-auto-1",
+        "definition_key": "report-handling",
+        "reference_id": "report-auto-1",
+        "state": "submitted",
+    }
+    dup_instance = {
+        "id": "wf-dup-99",
+        "definition_key": "report-handling",
+        "reference_id": "report-dup-99",
+        "state": "submitted",
+    }
+
+    insight_called = []
+
+    async def fake_core(base, path, identity, method="GET", **kwargs):
+        if base == config.DATA_URL and path == "/records":
+            if method == "POST":
+                return created_record
+            return [created_record, existing_duplicate]
+        if base == config.DATA_URL and path.startswith("/records/"):
+            return created_record
+        if base == config.WORKFLOW_URL and path == "/instances":
+            if method == "POST":
+                return instance
+            return [instance, dup_instance]
+        if base == config.INSIGHT_URL and path == "/analyze":
+            payload = kwargs["json_body"]
+            insight_called.append(payload)
+            if payload["labels"] == ["high", "normal", "low"]:
+                return {
+                    "ranked_labels": [
+                        {"label": "high", "score": 0.94},
+                        {"label": "normal", "score": 0.05},
+                        {"label": "low", "score": 0.01},
+                    ],
+                    "signals": ["nguy", "hiểm", "gãy"],
+                }
+            return {
+                "model_version": "phobert-base-v2-multitask-civic",
+                "ranked_labels": [
+                    {"label": "infrastructure", "score": 0.98},
+                    {"label": "transport", "score": 0.01},
+                ],
+                "signals": ["cột", "điện"],
+                "similar": [
+                    {"id": "report-dup-99", "similarity": 0.92},
+                ],
+            }
+        raise AssertionError(f"Unexpected core call: {base} {path}")
+
+    monkeypatch.setattr(core_client, "core_json", fake_core)
+
+    res = client.post("/reports", headers=CITIZEN, data={
+        "title": "Cột điện gãy đổ khẩn cấp",
+        "description": "Cột điện hạ thế bị gãy chắn ngang đường rất nguy hiểm chết người",
+        "category": "Chiếu sáng",
+        "address": "123 Đường Láng, Đống Đa, Hà Nội",
+        "latitude": 21.0123,
+        "longitude": 105.8123,
+    })
+    assert res.status_code == 201
+
+    assert len(insight_called) == 2
+    assert insight_called[0]["latitude"] == 21.0123
+    assert insight_called[0]["longitude"] == 105.8123
+    assert any(c["id"] == "report-dup-99" for c in insight_called[0]["candidates"])
+
+    sug = client.get("/reports/report-auto-1/triage-suggestion", headers=DISPATCHER)
+    assert sug.status_code == 200
+    data = sug.json()
+    assert data["suggested_unit"] == "infrastructure"
+    assert data["urgency"] == "high"
+    assert data["similar"][0]["id"] == "report-dup-99"
+    assert data["similar"][0]["similarity"] == 0.92
+
+    notifications = client.get("/notifications", headers=DISPATCHER).json()
+    triage_notifs = [n for n in notifications if n["kind"] == "triage_ready"]
+    assert len(triage_notifs) == 1
+    assert "CẢNH BÁO TRÙNG #report-d (92%)" in triage_notifs[0]["body"]
+

@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Prepare tenant-scoped report text for the generic DX-OS insight service."""
 
+import logging
 from fastapi import HTTPException
 
 from app.core import config, core_client
 from app.core.security import Caller
 from app.repositories.reports import save_triage_suggestion, triage_suggestion_for
 from app.services.reports import get_report_record, visible_report_views
+
+logger = logging.getLogger("opencity.triage")
+
 
 
 SEED_EXAMPLES = [
@@ -104,3 +108,24 @@ async def latest_suggestion(report_id: str, identity: Caller) -> dict:
     if suggestion is None:
         raise HTTPException(status_code=404, detail="No triage suggestion yet")
     return {**suggestion, "stale": suggestion["source_updated_at"] != record["updated_at"]}
+
+
+async def auto_triage_new_report(report_id: str, tenant: str, created_by: str) -> dict | None:
+    """Triggered automatically when a citizen submits a new report.
+
+    Uses dispatcher permissions to analyze the report with PhoBERT Multi-Task:
+    - 12 civic categories mapped to 4 municipal units
+    - 3 urgency levels (high / normal / low)
+    - Spatiotemporal deduplication against recent candidate reports
+    """
+    try:
+        system_caller = Caller(
+            user="ai-triage-daemon",
+            tenant=tenant,
+            roles=frozenset({"reports_dispatcher", "operator", "citizen"}),
+        )
+        return await generate_suggestion(report_id, system_caller)
+    except Exception as exc:
+        logger.warning("Automatic AI triage for report %s failed (non-blocking): %s", report_id, exc)
+        return None
+
