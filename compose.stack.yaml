@@ -7,12 +7,17 @@ services:
     depends_on:
       - opencity-backend
 
+  opencity-ai:
+    build: ../opencity-ai
+    environment:
+      INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:?Create .env from dxos-core/.env.example}
+
   opencity-backend:
     build: ../opencity-backend
     environment:
       DATA_URL: http://data:8000
       WORKFLOW_URL: http://workflow:8000
-      INSIGHT_URL: http://insight:8000
+      INSIGHT_URL: http://opencity-ai:8000
       INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET:?Create .env from dxos-core/.env.example}
       NEWS_DB_PATH: /service/data/bulletins.sqlite3
       SURVEY_DB_PATH: /service/data/surveys.sqlite3
@@ -27,7 +32,7 @@ services:
     depends_on:
       - data
       - workflow
-      - insight
+      - opencity-ai
     volumes:
       - opencity-bulletins:/service/data
 
