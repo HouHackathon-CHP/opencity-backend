@@ -145,10 +145,13 @@ def ensure_fresh_readings(tenant: str) -> None:
 
 
 def get_city_summary(identity: Caller) -> dict:
-    ensure_fresh_readings(identity.tenant)
+    if "public" not in identity.roles:
+        ensure_fresh_readings(identity.tenant)
     with closing(repo.air_quality_db()) as connection:
         repo.ensure_tenant_seed(connection, identity.tenant)
         stations = repo.list_stations(connection, identity.tenant)
+        if not can_manage(identity, "air_quality"):
+            stations = [station for station in stations if station["status"] != "hidden"]
         if not stations:
             return {
                 "tenant": identity.tenant,
@@ -213,7 +216,8 @@ def get_city_summary(identity: Caller) -> dict:
 
 
 def list_stations(identity: Caller) -> list[dict]:
-    ensure_fresh_readings(identity.tenant)
+    if "public" not in identity.roles:
+        ensure_fresh_readings(identity.tenant)
     with closing(repo.air_quality_db()) as connection:
         repo.ensure_tenant_seed(connection, identity.tenant)
         stations = repo.list_stations(connection, identity.tenant)
@@ -233,6 +237,8 @@ def get_station_detail(code: str, identity: Caller) -> dict:
         repo.ensure_tenant_seed(connection, identity.tenant)
         station = repo.get_station(connection, identity.tenant, code)
         if not station:
+            raise HTTPException(status_code=404, detail="Air quality station not found")
+        if station["status"] == "hidden" and not can_manage(identity, "air_quality"):
             raise HTTPException(status_code=404, detail="Air quality station not found")
 
         latest_rd = repo.get_latest_reading(connection, identity.tenant, code)
