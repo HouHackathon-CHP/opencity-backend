@@ -3,8 +3,10 @@ from contextlib import closing
 from datetime import datetime, timezone
 import json
 import math
+import os
 from pathlib import Path
 import sqlite3
+import sys
 from typing import Any
 import unicodedata
 import uuid
@@ -90,13 +92,13 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_bus_route_stops_stop ON bus_route_stops(stop_id)")
 
         row = conn.execute("SELECT count(*) FROM bus_routes").fetchone()
-        if row and row[0] == 0:
+        is_testing = "pytest" in sys.modules or bool(os.getenv("PYTEST_CURRENT_TEST"))
+        if row and row[0] == 0 and not is_testing:
             geojson_path = Path(config.BUS_SEARCH_DB_PATH).parent / "export.geojson"
             if not geojson_path.exists():
                 geojson_path = Path(__file__).resolve().parents[2] / "data" / "export.geojson"
             if geojson_path.exists():
                 try:
-                    import json
                     with open(geojson_path, "r", encoding="utf-8") as f:
                         geo_data = json.load(f)
                     import_osm_geojson(geo_data, replace_existing=False)
