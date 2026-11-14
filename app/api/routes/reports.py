@@ -157,6 +157,7 @@ async def generate_triage_suggestion(report_id: str, identity: Caller = Depends(
 class DuplicateReviewInput(BaseModel):
     similar_report_id: str = Field(min_length=1, max_length=128)
     is_duplicate: bool
+    merge: bool = False
 
 
 @router.get("/reports/{report_id}/duplicate-reviews")
@@ -172,9 +173,17 @@ def record_duplicate_review(
 ) -> dict:
     if not can_dispatch(identity):
         raise HTTPException(status_code=403, detail="reports_dispatcher role required")
-    return save_duplicate_review(
+    result = save_duplicate_review(
         identity.tenant, report_id, body.similar_report_id, body.is_duplicate, identity.user
     )
+    if body.is_duplicate and body.merge:
+        with closing(report_db()) as connection:
+            with connection:
+                add_report_event(
+                    connection, report_id, identity, "duplicate_merged",
+                    note=f"Đã gộp xử lý cùng phản ánh #{body.similar_report_id[:8].upper()}"
+                )
+    return result
 
 
 @router.post("/reports/{report_id}/retry-workflow")

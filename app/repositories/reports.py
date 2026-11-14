@@ -116,7 +116,19 @@ def triage_suggestion_for(tenant: str, report_id: str, suggestion_id: str | None
                LEFT JOIN triage_reviews r ON r.suggestion_id = s.id
                WHERE """ + condition + " ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1", params,
         ).fetchone()
-    return _triage_view(row) if row else None
+        if not row:
+            return None
+        rejs = connection.execute(
+            """SELECT similar_report_id FROM duplicate_reviews
+               WHERE tenant = ? AND report_id = ? AND is_duplicate = 0""",
+            (tenant, report_id),
+        ).fetchall()
+        rejected_ids = {r["similar_report_id"] for r in rejs}
+
+    view = _triage_view(row)
+    if rejected_ids and view.get("similar"):
+        view["similar"] = [item for item in view["similar"] if item["id"] not in rejected_ids]
+    return view
 
 
 def save_triage_review(connection: sqlite3.Connection, suggestion: dict,
@@ -179,6 +191,7 @@ def save_duplicate_review(tenant: str, report_id: str, similar_report_id: str,
                           is_duplicate: bool, user: str) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     review_id = str(uuid4())
+    sym_review_id = str(uuid4())
     with closing(report_db()) as connection:
         with connection:
             connection.execute(
@@ -190,6 +203,17 @@ def save_duplicate_review(tenant: str, report_id: str, similar_report_id: str,
                      reviewed_by = excluded.reviewed_by,
                      reviewed_at = excluded.reviewed_at""",
                 (review_id, tenant, report_id, similar_report_id, int(is_duplicate), user, now),
+            )
+            # Symmetric update for the other report so both reflect the same review decision
+            connection.execute(
+                """INSERT INTO duplicate_reviews
+                   (id, tenant, report_id, similar_report_id, is_duplicate, reviewed_by, reviewed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant, report_id, similar_report_id) DO UPDATE SET
+                     is_duplicate = excluded.is_duplicate,
+                     reviewed_by = excluded.reviewed_by,
+                     reviewed_at = excluded.reviewed_at""",
+                (sym_review_id, tenant, similar_report_id, report_id, int(is_duplicate), user, now),
             )
     return {
         "id": review_id,
@@ -238,16 +262,23 @@ def triage_summary_map(tenant: str) -> dict[str, dict]:
                 sim_list = json.loads(row["similar"])
             except Exception:
                 sim_list = []
-        top_sim = sim_list[0]["similarity"] if sim_list else 0.0
+
+        # Filter out candidates where is_duplicate is explicitly False
+        active_sim_list = [
+            c for c in sim_list
+            if confirmed_map.get(row["report_id"], {}).get(c["id"]) is not False
+        ]
+
+        top_sim = active_sim_list[0]["similarity"] if active_sim_list else 0.0
         report_confirms = confirmed_map.get(row["report_id"], {})
-        is_confirmed = any(report_confirms.values())
+        is_confirmed = any(v is True for k, v in report_confirms.items() if any(c["id"] == k for c in active_sim_list))
         result[row["report_id"]] = {
             "urgency": row["urgency"],
             "suggested_unit": row["suggested_unit"],
             "model_version": row["model_version"],
-            "similar_count": len(sim_list),
+            "similar_count": len(active_sim_list),
             "top_similarity": top_sim,
-            "has_duplicate": len(sim_list) > 0 and top_sim >= 0.50,
+            "has_duplicate": len(active_sim_list) > 0 and top_sim >= 0.50,
             "duplicate_confirmed": is_confirmed,
             "duplicate_reviews": report_confirms,
         }
