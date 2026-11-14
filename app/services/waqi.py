@@ -15,7 +15,7 @@ from app.repositories import air_quality as repo
 
 logger = logging.getLogger(__name__)
 
-SSL_CTX = ssl._create_unverified_context()
+SSL_CTX = ssl.create_default_context()
 
 
 def get_effective_waqi_token() -> str:

@@ -10,7 +10,7 @@ import urllib.request
 from fastapi import HTTPException
 
 from app.core import config
-from app.core.security import Caller, can_manage, require_manager
+from app.core.security import Caller, require_manager
 from app.repositories import bus_search as repo
 from app.schemas.bus_search import (
     BusAuditReport,
@@ -100,6 +100,12 @@ def sync_from_osm_overpass(
     overpass_url: str | None = None,
     route_ref: str | None = None,
 ) -> BusSyncResult:
+    require_manager(identity, "bus_search")
+    allowed_sources = set(OVERPASS_MIRRORS)
+    if config.OSM_OVERPASS_URL:
+        allowed_sources.add(config.OSM_OVERPASS_URL)
+    if overpass_url and overpass_url not in allowed_sources:
+        raise HTTPException(status_code=422, detail="Nguồn Overpass không được phép")
     target_url = overpass_url or config.OSM_OVERPASS_URL or OVERPASS_MIRRORS[0]
 
     if route_ref:
@@ -126,8 +132,6 @@ out skel qt;
     full_url = f"{target_url}?data={encoded_query}"
 
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
 
     data = None
     last_err = None
@@ -247,15 +251,7 @@ out skel qt;
 
 def import_osm_dataset(body: BusImportInput, identity: Caller) -> BusSyncResult:
     """Import user-provided OpenStreetMap GeoJSON or custom JSON data."""
-    if not (
-        "admin" in identity.roles
-        or can_manage(identity, "bus_search")
-        or "reports_operator" in identity.roles
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Bạn cần quyền quản trị viên hoặc cán bộ vận hành để nạp dữ liệu xe buýt.",
-        )
+    require_manager(identity, "bus_search")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     payload = body.payload

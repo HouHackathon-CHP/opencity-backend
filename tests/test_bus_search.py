@@ -544,6 +544,17 @@ def test_bus_import_and_sync(monkeypatch, tmp_path):
         headers=BASE_HEADERS,
         json={"source_name": "Test", "data_format": "geojson", "payload": sample_geojson}
     ).status_code == 403
+    assert client.post(
+        "/bus/import",
+        headers={**BASE_HEADERS, "X-DXOS-Roles": "reports_operator"},
+        json={"source_name": "Test", "data_format": "geojson", "payload": sample_geojson}
+    ).status_code == 403
+    assert client.post("/bus/sync", headers=BASE_HEADERS, json={}).status_code == 403
+    assert client.post(
+        "/bus/sync",
+        headers=OPERATOR_HEADERS,
+        json={"overpass_url": "http://127.0.0.1:8081/admin"},
+    ).status_code == 422
 
     import_resp = client.post(
         "/bus/import",
