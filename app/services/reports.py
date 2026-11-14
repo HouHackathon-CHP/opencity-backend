@@ -5,7 +5,7 @@ from fastapi import HTTPException
 
 from app.core import config, core_client
 from app.core.security import Caller, can_dispatch
-from app.repositories.reports import routing_for, routing_map
+from app.repositories.reports import routing_for, routing_map, triage_summary_map
 
 
 def matches_image_type(content: bytes, claimed_type: str) -> bool:
@@ -20,13 +20,19 @@ def report_view(record: dict, instance: dict | None = None) -> dict:
     return report_view_with_routing(record, instance, None)
 
 
-def report_view_with_routing(record: dict, instance: dict | None, routing: dict | None) -> dict:
+def report_view_with_routing(
+    record: dict,
+    instance: dict | None,
+    routing: dict | None,
+    triage_summary: dict | None = None,
+) -> dict:
     workflow_history = instance.get("history", []) if instance else []
     routing_history = [{
         "action": event["action"], "actor": event["actor"],
         "created_at": event["created_at"], "from_state": None, "to_state": None,
         "from_unit": event["from_unit"], "to_unit": event["to_unit"], "note": event["note"],
     } for event in (routing or {}).get("events", [])]
+    triage = triage_summary or {}
     return {
         "id": record["id"],
         "title": record["payload"].get("title", ""),
@@ -48,6 +54,13 @@ def report_view_with_routing(record: dict, instance: dict | None, routing: dict 
         "workflow_id": instance["id"] if instance else None,
         "state": instance["state"] if instance else None,
         "history": sorted([*workflow_history, *routing_history], key=lambda event: event["created_at"]),
+        "urgency": triage.get("urgency"),
+        "suggested_unit": triage.get("suggested_unit"),
+        "has_duplicate": triage.get("has_duplicate", False),
+        "top_similarity": triage.get("top_similarity", 0.0),
+        "similar_count": triage.get("similar_count", 0),
+        "duplicate_confirmed": triage.get("duplicate_confirmed", False),
+        "duplicate_reviews": triage.get("duplicate_reviews", {}),
     }
 
 
@@ -83,7 +96,8 @@ async def visible_report_views(identity: Caller) -> list[dict]:
     instances = await core_client.core_json(config.WORKFLOW_URL, "/instances", identity)
     by_record = {item["reference_id"]: item for item in instances if item["definition_key"] == "report-handling"}
     routing = routing_map(identity.tenant)
-    return [report_view_with_routing(item, by_record.get(item["id"]), routing.get(item["id"]))
+    triage_map = triage_summary_map(identity.tenant)
+    return [report_view_with_routing(item, by_record.get(item["id"]), routing.get(item["id"]), triage_map.get(item["id"]))
             for item in records if item["kind"] == "field-report"
             and report_visible(item, identity, routing.get(item["id"]))]
 

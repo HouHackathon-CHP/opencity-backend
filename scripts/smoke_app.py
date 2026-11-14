@@ -14,8 +14,8 @@ from provision_roles import provision
 
 
 ROOT = Path(__file__).resolve().parents[2]
-GATEWAY = "http://localhost:8000"
-IDENTITY = "http://localhost:8081"
+GATEWAY = "http://127.0.0.1:8000"
+IDENTITY = "http://127.0.0.1:8081"
 
 
 def env_values():

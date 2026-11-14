@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 from app.core import config, core_client
 from app.core.security import Caller, caller, can_dispatch, require_manager
@@ -11,7 +12,7 @@ from app.services.notifications import add_notification
 from app.schemas.reports import DispatchInput, TransferInput, NoteInput
 from app.repositories.reports import (
     report_db, routing_for, add_report_event, triage_suggestion_for,
-    save_triage_review, triage_metrics,
+    save_triage_review, triage_metrics, save_duplicate_review, get_duplicate_reviews,
 )
 from app.services import triage as triage_service
 from app.services.reports import (
@@ -151,6 +152,29 @@ async def generate_triage_suggestion(report_id: str, identity: Caller = Depends(
     if not can_dispatch(identity):
         raise HTTPException(status_code=403, detail="reports_dispatcher role required")
     return await triage_service.generate_suggestion(report_id, identity)
+
+
+class DuplicateReviewInput(BaseModel):
+    similar_report_id: str = Field(min_length=1, max_length=128)
+    is_duplicate: bool
+
+
+@router.get("/reports/{report_id}/duplicate-reviews")
+def list_duplicate_reviews(report_id: str, identity: Caller = Depends(caller)) -> list[dict]:
+    if not can_dispatch(identity):
+        raise HTTPException(status_code=403, detail="reports_dispatcher role required")
+    return get_duplicate_reviews(identity.tenant, report_id)
+
+
+@router.post("/reports/{report_id}/duplicate-reviews")
+def record_duplicate_review(
+    report_id: str, body: DuplicateReviewInput, identity: Caller = Depends(caller)
+) -> dict:
+    if not can_dispatch(identity):
+        raise HTTPException(status_code=403, detail="reports_dispatcher role required")
+    return save_duplicate_review(
+        identity.tenant, report_id, body.similar_report_id, body.is_duplicate, identity.user
+    )
 
 
 @router.post("/reports/{report_id}/retry-workflow")

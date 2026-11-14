@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[2]
-IDENTITY = "http://localhost:8081"
+IDENTITY = "http://127.0.0.1:8081"
 ROLES = {
     "dxos-dispatcher": "reports_dispatcher",
     "dxos-reports": "reports_operator",

@@ -242,3 +242,23 @@ def test_create_report_triggers_automatic_ai_triage(monkeypatch, tmp_path):
     assert len(triage_notifs) == 1
     assert "CẢNH BÁO TRÙNG #report-d (92%)" in triage_notifs[0]["body"]
 
+    # Verify duplicate review API
+    assert client.get("/reports/report-auto-1/duplicate-reviews", headers=CITIZEN).status_code == 403
+    reviews = client.get("/reports/report-auto-1/duplicate-reviews", headers=DISPATCHER)
+    assert reviews.status_code == 200
+    assert reviews.json() == []
+
+    post_rev = client.post(
+        "/reports/report-auto-1/duplicate-reviews",
+        headers=DISPATCHER,
+        json={"similar_report_id": "report-dup-99", "is_duplicate": True},
+    )
+    assert post_rev.status_code == 200
+    assert post_rev.json()["is_duplicate"] is True
+    assert post_rev.json()["similar_report_id"] == "report-dup-99"
+
+    reviews_after = client.get("/reports/report-auto-1/duplicate-reviews", headers=DISPATCHER).json()
+    assert len(reviews_after) == 1
+    assert reviews_after[0]["is_duplicate"] is True
+
+

@@ -61,6 +61,13 @@ def report_db() -> sqlite3.Connection:
             reviewed_by TEXT NOT NULL, reviewed_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS triage_reviews_tenant ON triage_reviews(tenant);
+        CREATE TABLE IF NOT EXISTS duplicate_reviews (
+            id TEXT PRIMARY KEY, tenant TEXT NOT NULL, report_id TEXT NOT NULL,
+            similar_report_id TEXT NOT NULL, is_duplicate INTEGER NOT NULL,
+            reviewed_by TEXT NOT NULL, reviewed_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS duplicate_reviews_unique
+            ON duplicate_reviews(tenant, report_id, similar_report_id);
     """)
     return connection
 
@@ -166,3 +173,83 @@ def add_report_event(connection: sqlite3.Connection, report_id: str, identity: "
         (str(uuid4()), report_id, identity.tenant, action, identity.user,
          from_unit, to_unit, note, datetime.now(timezone.utc).isoformat()),
     )
+
+
+def save_duplicate_review(tenant: str, report_id: str, similar_report_id: str,
+                          is_duplicate: bool, user: str) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    review_id = str(uuid4())
+    with closing(report_db()) as connection:
+        with connection:
+            connection.execute(
+                """INSERT INTO duplicate_reviews
+                   (id, tenant, report_id, similar_report_id, is_duplicate, reviewed_by, reviewed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant, report_id, similar_report_id) DO UPDATE SET
+                     is_duplicate = excluded.is_duplicate,
+                     reviewed_by = excluded.reviewed_by,
+                     reviewed_at = excluded.reviewed_at""",
+                (review_id, tenant, report_id, similar_report_id, int(is_duplicate), user, now),
+            )
+    return {
+        "id": review_id,
+        "report_id": report_id,
+        "similar_report_id": similar_report_id,
+        "is_duplicate": is_duplicate,
+        "reviewed_by": user,
+        "reviewed_at": now,
+    }
+
+
+def get_duplicate_reviews(tenant: str, report_id: str) -> list[dict]:
+    with closing(report_db()) as connection:
+        rows = connection.execute(
+            """SELECT * FROM duplicate_reviews WHERE tenant = ? AND report_id = ? ORDER BY reviewed_at DESC""",
+            (tenant, report_id),
+        ).fetchall()
+    return [{"id": r["id"], "report_id": r["report_id"], "similar_report_id": r["similar_report_id"],
+             "is_duplicate": bool(r["is_duplicate"]), "reviewed_by": r["reviewed_by"],
+             "reviewed_at": r["reviewed_at"]} for r in rows]
+
+
+def triage_summary_map(tenant: str) -> dict[str, dict]:
+    with closing(report_db()) as connection:
+        rows = connection.execute(
+            """SELECT s.report_id, s.urgency, s.suggested_unit, s.similar, s.model_version
+               FROM triage_suggestions s
+               WHERE s.tenant = ?
+               ORDER BY s.created_at ASC, s.rowid ASC""",
+            (tenant,),
+        ).fetchall()
+        reviews = connection.execute(
+            """SELECT report_id, similar_report_id, is_duplicate FROM duplicate_reviews WHERE tenant = ?""",
+            (tenant,),
+        ).fetchall()
+
+    confirmed_map: dict[str, dict[str, bool]] = {}
+    for r in reviews:
+        confirmed_map.setdefault(r["report_id"], {})[r["similar_report_id"]] = bool(r["is_duplicate"])
+
+    result = {}
+    for row in rows:
+        sim_list = []
+        if row["similar"]:
+            try:
+                sim_list = json.loads(row["similar"])
+            except Exception:
+                sim_list = []
+        top_sim = sim_list[0]["similarity"] if sim_list else 0.0
+        report_confirms = confirmed_map.get(row["report_id"], {})
+        is_confirmed = any(report_confirms.values())
+        result[row["report_id"]] = {
+            "urgency": row["urgency"],
+            "suggested_unit": row["suggested_unit"],
+            "model_version": row["model_version"],
+            "similar_count": len(sim_list),
+            "top_similarity": top_sim,
+            "has_duplicate": len(sim_list) > 0 and top_sim >= 0.50,
+            "duplicate_confirmed": is_confirmed,
+            "duplicate_reviews": report_confirms,
+        }
+    return result
+
