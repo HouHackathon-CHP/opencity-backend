@@ -292,6 +292,7 @@ def sync_live_data(identity: Caller) -> dict:
 
 
 def get_waqi_status(identity: Caller) -> dict:
+    require_manager(identity, "air_quality")
     from app.services import waqi
     token = waqi.get_effective_waqi_token()
     has_token = bool(token and token.lower() != "demo")

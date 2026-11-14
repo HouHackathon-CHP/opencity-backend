@@ -27,6 +27,8 @@ OPERATOR = {
 
 def test_air_quality_public_and_operator_flow(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "AIR_QUALITY_DB_PATH", str(tmp_path / "air-quality.sqlite3"))
+    assert client.get("/air-quality/waqi-status", headers=CITIZEN).status_code == 403
+    assert client.get("/air-quality/waqi-status", headers=OPERATOR).status_code == 200
 
     summary_resp = client.get("/air-quality/summary", headers=CITIZEN)
     assert summary_resp.status_code == 200
