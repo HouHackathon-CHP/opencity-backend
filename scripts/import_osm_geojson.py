@@ -14,12 +14,9 @@ def main():
     target_path = Path(sys.argv[1]) if len(sys.argv) > 1 else default_path
 
     if not target_path.exists():
-        fallback = Path("D:/Download/export.geojson")
-        if fallback.exists():
-            target_path = fallback
-        else:
-            print(f"Error: File not found at {target_path}")
-            sys.exit(1)
+        print(f"Error: Không tìm thấy file dữ liệu GeoJSON tại: {target_path}")
+        print("Vui lòng đảm bảo file 'data/export.geojson' đã có sẵn trong thư mục dữ liệu của dự án.")
+        sys.exit(1)
 
     print(f"Reading OpenStreetMap GeoJSON from: {target_path}")
     with open(target_path, "r", encoding="utf-8") as f:

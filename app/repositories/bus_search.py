@@ -89,7 +89,19 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_bus_route_stops_route ON bus_route_stops(route_id, direction)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_bus_route_stops_stop ON bus_route_stops(stop_id)")
 
-        pass
+        row = conn.execute("SELECT count(*) FROM bus_routes").fetchone()
+        if row and row[0] == 0:
+            geojson_path = Path(config.BUS_SEARCH_DB_PATH).parent / "export.geojson"
+            if not geojson_path.exists():
+                geojson_path = Path(__file__).resolve().parents[2] / "data" / "export.geojson"
+            if geojson_path.exists():
+                try:
+                    import json
+                    with open(geojson_path, "r", encoding="utf-8") as f:
+                        geo_data = json.load(f)
+                    import_osm_geojson(geo_data, replace_existing=False)
+                except Exception:
+                    pass
 
 
 def list_routes(
