@@ -7,6 +7,7 @@ marked demo records in the local demo tenant; repeated runs reuse existing recor
 
 import json
 
+from demo_accounts import credentials
 from smoke_app import GATEWAY, env_values, require, send, token
 
 
@@ -18,14 +19,14 @@ def json_request(method: str, path: str, auth: str, payload: dict | None = None)
 
 def main() -> None:
     values = env_values()
-    citizen = token("dxos-citizen", values["DEMO_CITIZEN_PASSWORD"])
-    outsider = token("dxos-outsider", values["DEMO_OUTSIDER_PASSWORD"])
-    staff = {feature: token(user, values["DEMO_OPERATOR_PASSWORD"]) for feature, user in (
-        ("hotlines", "dxos-hotlines"),
-        ("communications", "dxos-communications"),
-        ("community_groups", "dxos-community"),
-        ("social_feedback", "dxos-social-feedback"),
-        ("digital_ward", "dxos-digital-ward"),
+    citizen = token(values.get("DEMO_CITIZEN_USERNAME", "dxos-citizen"), values["DEMO_CITIZEN_PASSWORD"])
+    outsider = token(values.get("DEMO_OUTSIDER_USERNAME", "dxos-outsider"), values["DEMO_OUTSIDER_PASSWORD"])
+    staff = {feature: token(*credentials(values, account)) for feature, account in (
+        ("hotlines", "HOTLINES"),
+        ("communications", "COMMUNICATIONS"),
+        ("community_groups", "COMMUNITY"),
+        ("social_feedback", "SOCIAL_FEEDBACK"),
+        ("digital_ward", "DIGITAL_WARD"),
     )}
     for feature, auth in staff.items():
         status, capabilities = json_request("GET", "/me/capabilities", auth)

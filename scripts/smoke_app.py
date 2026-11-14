@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+from demo_accounts import credentials
 from provision_roles import provision
 
 
@@ -72,16 +73,16 @@ def post_json(url, auth, payload):
 def main():
     provision()
     values = env_values()
-    citizen = token("dxos-citizen", values["DEMO_CITIZEN_PASSWORD"])
-    dispatcher = token("dxos-dispatcher", values["DEMO_OPERATOR_PASSWORD"])
-    reports_operator = token("dxos-reports", values["DEMO_OPERATOR_PASSWORD"])
-    environment_operator = token("dxos-reports-environment", values["DEMO_OPERATOR_PASSWORD"])
-    bulletins_operator = token("dxos-bulletins", values["DEMO_OPERATOR_PASSWORD"])
-    surveys_operator = token("dxos-surveys", values["DEMO_OPERATOR_PASSWORD"])
-    appointments_operator = token("dxos-appointments", values["DEMO_OPERATOR_PASSWORD"])
-    business_operator = token("dxos-business-feedback", values["DEMO_OPERATOR_PASSWORD"])
-    hotlines_operator = token("dxos-hotlines", values["DEMO_OPERATOR_PASSWORD"])
-    outsider = token("dxos-outsider", values["DEMO_OUTSIDER_PASSWORD"])
+    citizen = token(values.get("DEMO_CITIZEN_USERNAME", "dxos-citizen"), values["DEMO_CITIZEN_PASSWORD"])
+    dispatcher = token(*credentials(values, "DISPATCHER"))
+    reports_operator = token(*credentials(values, "REPORTS"))
+    environment_operator = token(*credentials(values, "REPORTS_ENVIRONMENT"))
+    bulletins_operator = token(*credentials(values, "BULLETINS"))
+    surveys_operator = token(*credentials(values, "SURVEYS"))
+    appointments_operator = token(*credentials(values, "APPOINTMENTS"))
+    business_operator = token(*credentials(values, "BUSINESS_FEEDBACK"))
+    hotlines_operator = token(*credentials(values, "HOTLINES"))
+    outsider = token(values.get("DEMO_OUTSIDER_USERNAME", "dxos-outsider"), values["DEMO_OUTSIDER_PASSWORD"])
     status, result = send("GET", f"{GATEWAY}/api/opencity/reports")
     require(status, 401, result)  # no token
     for user_token, expected, unit, dispatch in ((dispatcher, ["reports"], None, True),
