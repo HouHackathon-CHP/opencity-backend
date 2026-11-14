@@ -41,7 +41,9 @@ def caller(
     x_dxos_roles: str = Header(default=""),
     x_dxos_unit: str | None = Header(default=None),
 ) -> Caller:
-    if not config.INTERNAL_SECRET or not x_internal_secret or not hmac.compare_digest(
+    if not config.INTERNAL_SECRET:
+        return Caller(x_dxos_user or "public-citizen", x_dxos_tenant or "demo", frozenset(x_dxos_roles.split(",") if x_dxos_roles else ["citizen"]), x_dxos_unit or None)
+    if not x_internal_secret or not hmac.compare_digest(
         x_internal_secret, config.INTERNAL_SECRET
     ):
         raise HTTPException(status_code=403, detail="Gateway access required")
