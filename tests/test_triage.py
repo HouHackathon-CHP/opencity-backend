@@ -262,3 +262,29 @@ def test_create_report_triggers_automatic_ai_triage(monkeypatch, tmp_path):
     assert reviews_after[0]["is_duplicate"] is True
 
 
+def test_voice_transcribe_endpoint(monkeypatch):
+    async def fake_voice(base, path, identity, method="GET", **kwargs):
+        assert base == config.INSIGHT_URL
+        assert path == "/transcribe"
+        assert method == "POST"
+        assert "files" in kwargs
+        return {
+            "text": "Đèn tín hiệu ngã tư bị hỏng",
+            "suggested_title": "Đèn tín hiệu ngã tư bị hỏng",
+            "suggested_category": "Giao thông",
+            "suggested_unit": "transport",
+            "urgency": "high",
+            "duration_seconds": 2.5,
+        }
+
+    monkeypatch.setattr(core_client, "core_json", fake_voice)
+    files = {"audio": ("test.webm", b"fake audio data", "audio/webm")}
+    resp = client.post("/reports/voice-transcribe", headers=CITIZEN, files=files)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["text"] == "Đèn tín hiệu ngã tư bị hỏng"
+    assert data["suggested_category"] == "Giao thông"
+    assert data["urgency"] == "high"
+
+
+

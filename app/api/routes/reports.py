@@ -131,6 +131,23 @@ async def create_report(
     return {**report_view(record, instance), "warnings": warnings}
 
 
+@router.post("/reports/voice-transcribe")
+async def transcribe_report_voice(
+    audio: UploadFile = File(..., description="Audio recording of spoken civic report"),
+    identity: Caller = Depends(caller),
+) -> dict:
+    audio_bytes = await audio.read(25 * 1024 * 1024 + 1)
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Tệp âm thanh trống.")
+    if len(audio_bytes) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Dung lượng tệp âm thanh vượt quá 25 MiB.")
+
+    files = {"audio": (audio.filename or "recording.webm", audio_bytes, audio.content_type or "audio/webm")}
+    return await core_client.core_json(
+        config.INSIGHT_URL, "/transcribe", identity, "POST", files=files
+    )
+
+
 @router.get("/reports/{report_id}")
 async def get_report(report_id: str, identity: Caller = Depends(caller)) -> dict:
     record = await get_report_record(report_id, identity)
