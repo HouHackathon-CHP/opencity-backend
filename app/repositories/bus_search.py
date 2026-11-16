@@ -473,6 +473,11 @@ def find_bus_connections(
                         d_stop["latitude"],
                         d_stop["longitude"],
                     )
+                    direct_dist_km = _haversine_distance_km(o_stop["latitude"], o_stop["longitude"], d_stop["latitude"], d_stop["longitude"])
+                    direct_co2 = max(80, int(round(max(direct_dist_km * 1.3, stops_count * 0.8) * 115)))
+                    op_str = str(m["operator"]) if "operator" in m.keys() and m["operator"] else ""
+                    is_elec = str(m["route_number"]).upper().startswith("E") or "vinbus" in op_str.lower()
+
                     rec = {
                         "type": "direct",
                         "route_number": m["route_number"],
@@ -500,6 +505,8 @@ def find_bus_connections(
                         "direction": m["direction"],
                         "path_segment": sliced_path,
                         "trip_stops": trip_stops,
+                        "co2_saved_grams": direct_co2,
+                        "is_electric": is_elec,
                     }
 
                     span = m["alight_order"] - m["board_order"]
@@ -588,6 +595,11 @@ def find_bus_connections(
                         seg2 = _slice_path_between_stops(r2_full, tm["t_lat"], tm["t_lng"], d_stop["latitude"], d_stop["longitude"])
                         combined_path = seg1 + seg2
 
+                        t_dist1 = _haversine_distance_km(o_stop["latitude"], o_stop["longitude"], tm["t_lat"], tm["t_lng"])
+                        t_dist2 = _haversine_distance_km(tm["t_lat"], tm["t_lng"], d_stop["latitude"], d_stop["longitude"])
+                        t_co2 = max(150, int(round(max((t_dist1 + t_dist2) * 1.3, total_stops * 0.8) * 115)))
+                        t_elec = str(tm["r1_num"]).upper().startswith("E") or str(tm["r2_num"]).upper().startswith("E")
+
                         recommendations.append({
                             "type": "transfer",
                             "route_number": tm["r1_num"],
@@ -640,6 +652,8 @@ def find_bus_connections(
                                 "longitude": d_stop["longitude"],
                                 "stop_order": tm["r2_alight_order"],
                             },
+                            "co2_saved_grams": t_co2,
+                            "is_electric": t_elec,
                         })
 
         recommendations.sort(key=lambda r: (0 if r["type"] == "direct" else 1, r["estimated_minutes"]))
@@ -1284,5 +1298,64 @@ def delete_stop(stop_id: str) -> bool:
         conn.execute("DELETE FROM bus_route_stops WHERE stop_id = ?", (stop_id,))
         cur = conn.execute("DELETE FROM bus_stops WHERE id = ?", (stop_id,))
         return cur.rowcount > 0
+
+
+_WALK_CACHE: dict[str, dict] = {}
+
+
+def get_walking_route(
+    from_lat: float,
+    from_lng: float,
+    to_lat: float,
+    to_lng: float,
+) -> dict:
+    key = f"{from_lat:.5f},{from_lng:.5f}->{to_lat:.5f},{to_lng:.5f}"
+    if key in _WALK_CACHE:
+        return _WALK_CACHE[key]
+
+    direct_dist_km = _haversine_distance_km(from_lat, from_lng, to_lat, to_lng)
+    if direct_dist_km < 0.015:
+        res = {
+            "status": "ok",
+            "distance_m": round(direct_dist_km * 1000),
+            "duration_s": max(10, round(direct_dist_km * 1000 / 1.2)),
+            "coordinates": [[from_lng, from_lat], [to_lng, to_lat]],
+        }
+        _WALK_CACHE[key] = res
+        return res
+
+    try:
+        import httpx
+        url = f"https://router.project-osrm.org/route/v1/foot/{from_lng:.6f},{from_lat:.6f};{to_lng:.6f},{to_lat:.6f}?overview=full&geometries=geojson"
+        with httpx.Client(timeout=4.0) as client:
+            resp = client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "Ok" and data.get("routes"):
+                    r = data["routes"][0]
+                    coords = r.get("geometry", {}).get("coordinates", [])
+                    if coords:
+                        res = {
+                            "status": "ok",
+                            "distance_m": round(r.get("distance", direct_dist_km * 1000)),
+                            "duration_s": round(r.get("duration", direct_dist_km * 1000 / 1.2)),
+                            "coordinates": coords,
+                        }
+                        if len(_WALK_CACHE) > 500:
+                            _WALK_CACHE.clear()
+                        _WALK_CACHE[key] = res
+                        return res
+    except Exception:
+        pass
+
+    res = {
+        "status": "fallback",
+        "distance_m": round(direct_dist_km * 1000),
+        "duration_s": max(20, round(direct_dist_km * 1000 / 1.2)),
+        "coordinates": [[from_lng, from_lat], [to_lng, to_lat]],
+    }
+    _WALK_CACHE[key] = res
+    return res
+
 
 

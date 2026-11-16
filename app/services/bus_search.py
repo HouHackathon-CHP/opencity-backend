@@ -342,3 +342,18 @@ def delete_stop(identity: Caller, stop_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Không tìm thấy trạm dừng để xóa")
     return {"success": True, "message": f"Đã xóa thành công trạm dừng {stop_id}"}
 
+
+def get_walking_route(
+    from_lat: float,
+    from_lng: float,
+    to_lat: float,
+    to_lng: float,
+) -> dict:
+    return repo.get_walking_route(
+        from_lat=from_lat,
+        from_lng=from_lng,
+        to_lat=to_lat,
+        to_lng=to_lng,
+    )
+
+
