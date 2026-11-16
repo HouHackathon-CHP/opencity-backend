@@ -4,6 +4,8 @@ services:
   gateway:
     environment:
       EXTRA_UPSTREAMS: '{"opencity":"http://opencity-backend:8000"}'
+      PUBLIC_GET_ROUTES: >-
+        {"opencity":{"tenant":"demo","paths":["bulletins","bulletins/{id}","hotlines","air-quality/summary","air-quality/stations","air-quality/stations/{id}","bus/routes","bus/routes/{id}","bus/stops","bus/stops/{id}","bus/find","bus/audit"]}}
     depends_on:
       - opencity-backend
 

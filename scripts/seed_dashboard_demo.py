@@ -8,6 +8,7 @@ Repeated runs do not create duplicate reports or reassign existing cases.
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+from demo_accounts import credentials
 from smoke_app import GATEWAY, env_values, post_json, require, send, token
 
 
@@ -35,8 +36,8 @@ def multipart(fields: dict[str, str]) -> tuple[bytes, str]:
 
 def main() -> None:
     values = env_values()
-    citizen = token("dxos-citizen", values["DEMO_CITIZEN_PASSWORD"])
-    dispatcher = token("dxos-dispatcher", values["DEMO_OPERATOR_PASSWORD"])
+    citizen = token(values.get("DEMO_CITIZEN_USERNAME", "dxos-citizen"), values["DEMO_CITIZEN_PASSWORD"])
+    dispatcher = token(*credentials(values, "DISPATCHER"))
     status, existing = send("GET", f"{GATEWAY}/api/opencity/reports", token=dispatcher)
     require(status, 200, existing)
     by_title = {item["title"]: item for item in existing}

@@ -23,6 +23,7 @@ OPERATOR = {
     "X-DXOS-Tenant": "tenant-1",
     "X-DXOS-Roles": "air_quality_operator",
 }
+PUBLIC = {**CITIZEN, "X-DXOS-User": "anonymous", "X-DXOS-Roles": "public"}
 
 
 def test_air_quality_public_and_operator_flow(monkeypatch, tmp_path):
@@ -85,3 +86,19 @@ def test_air_quality_public_and_operator_flow(monkeypatch, tmp_path):
     updated_detail = client.get("/air-quality/stations/HN-HOANKIEM", headers=CITIZEN).json()
     assert updated_detail["latest_reading"]["aqi"] == 185
     assert updated_detail["classification"]["label"] == "Xấu"
+
+
+def test_public_air_quality_excludes_hidden_stations(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "AIR_QUALITY_DB_PATH", str(tmp_path / "public-air-quality.sqlite3"))
+    station = {
+        "code": "HN-HIDDEN", "name": "Trạm nội bộ", "address": "Hà Nội",
+        "area_type": "Đô thị", "latitude": 21.03, "longitude": 105.85,
+    }
+    assert client.post("/air-quality/stations", headers=OPERATOR, json=station).status_code == 201
+    assert client.patch(
+        "/air-quality/stations/HN-HIDDEN/status", headers=OPERATOR, json={"status": "hidden"}
+    ).status_code == 200
+    assert client.get("/air-quality/stations", headers=PUBLIC).json() == []
+    assert client.get("/air-quality/stations/HN-HIDDEN", headers=PUBLIC).status_code == 404
+    assert client.get("/air-quality/summary", headers=PUBLIC).json()["total_stations"] == 0
+    assert client.get("/air-quality/stations/HN-HIDDEN", headers=OPERATOR).status_code == 200
