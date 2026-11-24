@@ -82,3 +82,7 @@ def delete_parking(parking_id: str, identity: Caller) -> dict[str, Any]:
     if not ok:
         raise HTTPException(status_code=404, detail="Không tìm thấy điểm đỗ xe để xóa")
     return {"success": True, "id": parking_id}
+
+
+def get_footprints() -> dict[str, Any]:
+    return repo.get_footprints()

@@ -12,6 +12,7 @@ from uuid import uuid4
 
 PARKING_DB_PATH = os.getenv("PARKING_DB_PATH", "data/parking.sqlite3")
 PARKING_SEED_PATH = os.getenv("PARKING_SEED_PATH", "data/parking_osm.geojson")
+PARKING_FOOTPRINTS_PATH = os.getenv("PARKING_FOOTPRINTS_PATH", "data/parking_footprints.geojson")
 
 HANOI_DISTRICT_CENTERS = [
     ("Hoàn Kiếm", 21.0285, 105.8542),
@@ -578,3 +579,26 @@ def delete_parking(parking_id: str) -> bool:
         rowcount = cur.rowcount
     conn.close()
     return rowcount > 0
+
+
+_footprints_cache: dict[str, Any] | None = None
+
+
+def get_footprints() -> dict[str, Any]:
+    global _footprints_cache
+    if _footprints_cache is not None:
+        return _footprints_cache
+
+    candidates = [
+        Path(PARKING_FOOTPRINTS_PATH),
+        Path("opencity-backend-main") / PARKING_FOOTPRINTS_PATH,
+        Path(__file__).resolve().parents[2] / PARKING_FOOTPRINTS_PATH,
+        Path("/service/data/parking_footprints.geojson"),
+    ]
+    for p in candidates:
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                _footprints_cache = json.load(f)
+                return _footprints_cache
+
+    return {"type": "FeatureCollection", "features": []}

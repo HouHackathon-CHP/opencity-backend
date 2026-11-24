@@ -51,6 +51,11 @@ def get_districts() -> list[str]:
     return service.list_districts()
 
 
+@router.get("/footprints")
+def get_footprints() -> dict[str, Any]:
+    return service.get_footprints()
+
+
 @router.get("/{parking_id}", response_model=ParkingDetail)
 def get_parking_detail(
     parking_id: str,
