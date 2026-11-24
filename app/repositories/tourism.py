@@ -8,8 +8,10 @@ from pathlib import Path
 import sqlite3
 import unicodedata
 from typing import Any
+from uuid import uuid4
 
-from app.core import config
+TOURISM_DB_PATH = os.getenv("TOURISM_DB_PATH", "data/tourism.sqlite3")
+TOURISM_SEED_PATH = os.getenv("TOURISM_SEED_PATH", "data/tourism_osm.geojson")
 
 
 def _unaccent(s: str | None) -> str:
@@ -36,7 +38,7 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def _db_connection() -> sqlite3.Connection:
-    db_path = Path(config.TOURISM_DB_PATH)
+    db_path = Path(TOURISM_DB_PATH)
     if not db_path.exists() or db_path.stat().st_size < 10_000:
         alt_path = Path("opencity-backend-main") / db_path
         if alt_path.exists() and alt_path.stat().st_size > (db_path.stat().st_size if db_path.exists() else 0):
@@ -148,7 +150,7 @@ def init_db() -> None:
             if not osm_file.exists():
                 osm_file = Path("opencity-backend-main/data/tourism_osm.geojson")
             
-            target = osm_file if osm_file.exists() else Path(config.TOURISM_SEED_PATH)
+            target = osm_file if osm_file.exists() else Path(TOURISM_SEED_PATH)
             if not target.exists():
                 target = Path("opencity-backend-main") / target
             if target.exists():
@@ -372,3 +374,91 @@ def get_districts() -> list[str]:
             ORDER BY district ASC
         """).fetchall()
         return [r[0] for r in rows]
+
+
+def create_destination(data: dict[str, Any]) -> dict[str, Any]:
+    init_db()
+    dest_id = data.get("id") or f"custom-{uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    bus_routes = json.dumps(data.get("connecting_bus_routes") or [])
+    tags = json.dumps(data.get("tags") or [])
+    with closing(_db_connection()) as conn, conn:
+        conn.execute(
+            """
+            INSERT INTO tourism_destinations (
+                id, name, category, address, district, latitude, longitude,
+                heritage_level, description, opening_hours, admission_fee,
+                connecting_bus_routes, osm_id, tags, audio_guide, active,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                dest_id,
+                data["name"],
+                data.get("category", "monument"),
+                data.get("address", ""),
+                data.get("district", "Hà Nội"),
+                float(data["latitude"]),
+                float(data["longitude"]),
+                data.get("heritage_level", "Di tích Lịch sử - Văn hóa"),
+                data.get("description", ""),
+                data.get("opening_hours", "8:00 - 17:00"),
+                data.get("admission_fee", "Miễn phí"),
+                bus_routes,
+                data.get("osm_id", None),
+                tags,
+                1 if data.get("audio_guide") else 0,
+                1 if data.get("active", True) else 0,
+                now,
+                now,
+            ),
+        )
+    return get_destination_by_id(dest_id) or data
+
+
+def update_destination(destination_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    init_db()
+    now = datetime.now(timezone.utc).isoformat()
+    bus_routes = json.dumps(data.get("connecting_bus_routes") or [])
+    tags = json.dumps(data.get("tags") or [])
+    with closing(_db_connection()) as conn, conn:
+        cursor = conn.execute(
+            """
+            UPDATE tourism_destinations SET
+                name = ?, category = ?, address = ?, district = ?,
+                latitude = ?, longitude = ?, heritage_level = ?,
+                description = ?, opening_hours = ?, admission_fee = ?,
+                connecting_bus_routes = ?, tags = ?, audio_guide = ?,
+                active = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                data["name"],
+                data.get("category", "monument"),
+                data.get("address", ""),
+                data.get("district", "Hà Nội"),
+                float(data["latitude"]),
+                float(data["longitude"]),
+                data.get("heritage_level", "Di tích Lịch sử - Văn hóa"),
+                data.get("description", ""),
+                data.get("opening_hours", "8:00 - 17:00"),
+                data.get("admission_fee", "Miễn phí"),
+                bus_routes,
+                tags,
+                1 if data.get("audio_guide") else 0,
+                1 if data.get("active", True) else 0,
+                now,
+                destination_id,
+            ),
+        )
+        if cursor.rowcount == 0:
+            return None
+    return get_destination_by_id(destination_id)
+
+
+def delete_destination(destination_id: str) -> bool:
+    init_db()
+    with closing(_db_connection()) as conn, conn:
+        cursor = conn.execute("DELETE FROM tourism_destinations WHERE id = ?", (destination_id,))
+        return cursor.rowcount > 0
+

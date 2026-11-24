@@ -692,8 +692,8 @@ def get_audit_report() -> dict:
                     "level": "info",
                     "category": "route",
                     "item_id": r_id,
-                    "title": f"Tuyến {r['route_number']} chưa liên kết OpenStreetMap Relation ID",
-                    "description": "Cần đối chiếu với quan hệ giao thông công cộng trên OpenStreetMap.",
+                    "title": f"Tuyến {r['route_number']} đang chờ liên kết định danh mạng lưới",
+                    "description": "Cần đối chiếu với cơ sở dữ liệu định danh giao thông công cộng.",
                 })
 
         no_shelter_count = conn.execute("SELECT COUNT(*) FROM bus_stops WHERE has_shelter = 0 AND active = 1").fetchone()[0]
@@ -702,8 +702,8 @@ def get_audit_report() -> dict:
                 "level": "info",
                 "category": "stop",
                 "item_id": "all-stops-shelter",
-                "title": f"{no_shelter_count} trạm dừng chưa khảo sát thông tin nhà chờ (shelter)",
-                "description": "Thẻ shelter=* trên OpenStreetMap hỗ trợ cộng đồng kiểm tra tiện nghi nhà chờ xe buýt.",
+                "title": f"{no_shelter_count} trạm dừng đang cập nhật dữ liệu tiện ích & nhà chờ",
+                "description": "Hệ thống đang tiến hành khảo sát thực địa để hoàn thiện thông tin nhà chờ xe buýt.",
             })
 
         completeness_pct = round(

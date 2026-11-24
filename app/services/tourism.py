@@ -2,11 +2,12 @@
 from typing import Any
 from fastapi import HTTPException
 
-from app.core.security import Caller
+from app.core.security import Caller, require_manager
 from app.repositories import tourism as repo
 from app.schemas.tourism import (
     TourismCategorySummary,
     TourismDestinationDetail,
+    TourismDestinationInput,
     TourismDestinationSummary,
 )
 
@@ -129,3 +130,25 @@ def get_categories(identity: Caller) -> list[TourismCategorySummary]:
 
 def get_districts(identity: Caller) -> list[str]:
     return repo.get_districts()
+
+
+def create_destination(identity: Caller, data: TourismDestinationInput) -> dict[str, Any]:
+    require_manager(identity, "tourism")
+    return repo.create_destination(data.model_dump())
+
+
+def update_destination(identity: Caller, destination_id: str, data: TourismDestinationInput) -> dict[str, Any]:
+    require_manager(identity, "tourism")
+    item = repo.update_destination(destination_id, data.model_dump())
+    if not item:
+        raise HTTPException(status_code=404, detail="Destination not found")
+    return item
+
+
+def delete_destination(identity: Caller, destination_id: str) -> dict[str, Any]:
+    require_manager(identity, "tourism")
+    success = repo.delete_destination(destination_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Destination not found")
+    return {"message": "Destination deleted successfully", "id": destination_id}
+

@@ -6,6 +6,7 @@ from app.core.security import Caller, caller
 from app.schemas.tourism import (
     TourismCategorySummary,
     TourismDestinationDetail,
+    TourismDestinationInput,
     TourismDestinationSummary,
 )
 from app.services import tourism as service
@@ -73,3 +74,33 @@ def list_districts(
     identity: Caller = Depends(caller),
 ) -> list[str]:
     return service.get_districts(identity=identity)
+
+
+@router.post("/destinations", response_model=TourismDestinationDetail, status_code=201)
+def create_destination(
+    body: TourismDestinationInput,
+    identity: Caller = Depends(caller),
+) -> TourismDestinationDetail:
+    return service.create_destination(identity=identity, data=body)
+
+
+@router.put("/destinations/{destination_id}", response_model=TourismDestinationDetail)
+def update_destination(
+    destination_id: str,
+    body: TourismDestinationInput,
+    identity: Caller = Depends(caller),
+) -> TourismDestinationDetail:
+    return service.update_destination(
+        destination_id=destination_id,
+        identity=identity,
+        data=body,
+    )
+
+
+@router.delete("/destinations/{destination_id}")
+def delete_destination(
+    destination_id: str,
+    identity: Caller = Depends(caller),
+) -> dict[str, Any]:
+    return service.delete_destination(destination_id=destination_id, identity=identity)
+
