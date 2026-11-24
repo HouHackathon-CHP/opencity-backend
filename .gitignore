@@ -4,5 +4,7 @@ __pycache__/
 *.pyc
 data/*
 !data/export.geojson
+!data/tourism_osm.geojson
 !data/.gitkeep
 *.sqlite3
+*.db
