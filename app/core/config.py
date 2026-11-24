@@ -30,6 +30,7 @@ MANAGEMENT_ROLES = {
     "digital_ward": "digital_ward_operator",
     "bus_search": "bus_search_operator",
     "tourism": "tourism_operator",
+    "facilities": "facilities_operator",
 }
 NEWS_DB_PATH = os.getenv("NEWS_DB_PATH", "data/bulletins.sqlite3")
 SURVEY_DB_PATH = os.getenv("SURVEY_DB_PATH", "data/surveys.sqlite3")
@@ -47,4 +48,5 @@ SOCIAL_FEEDBACK_DB_PATH = os.getenv("SOCIAL_FEEDBACK_DB_PATH", "data/social-feed
 DIGITAL_WARD_DB_PATH = os.getenv("DIGITAL_WARD_DB_PATH", "data/digital-ward.sqlite3")
 TOURISM_DB_PATH = os.getenv("TOURISM_DB_PATH", "data/tourism.sqlite3")
 TOURISM_SEED_PATH = os.getenv("TOURISM_SEED_PATH", "data/tourism_osm.geojson")
+FACILITIES_DB_PATH = os.getenv("FACILITIES_DB_PATH", "data/facilities.sqlite3")
 VALID_UNITS = frozenset(REPORT_UNITS.values())

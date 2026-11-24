@@ -94,10 +94,15 @@ def init_db() -> None:
         row = conn.execute("SELECT count(*) FROM bus_routes").fetchone()
         is_testing = "pytest" in sys.modules or bool(os.getenv("PYTEST_CURRENT_TEST"))
         if row and row[0] == 0 and not is_testing:
-            geojson_path = Path(config.BUS_SEARCH_DB_PATH).parent / "export.geojson"
-            if not geojson_path.exists():
-                geojson_path = Path(__file__).resolve().parents[2] / "data" / "export.geojson"
-            if geojson_path.exists():
+            data_dir = Path(config.BUS_SEARCH_DB_PATH).parent
+            candidate_paths = [
+                data_dir / "bus_osm.geojson",
+                data_dir / "export.geojson",
+                Path(__file__).resolve().parents[2] / "data" / "bus_osm.geojson",
+                Path(__file__).resolve().parents[2] / "data" / "export.geojson",
+            ]
+            geojson_path = next((p for p in candidate_paths if p.exists()), None)
+            if geojson_path:
                 try:
                     with open(geojson_path, "r", encoding="utf-8") as f:
                         geo_data = json.load(f)
