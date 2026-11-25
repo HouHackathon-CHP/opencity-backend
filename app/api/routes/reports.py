@@ -144,7 +144,7 @@ async def transcribe_report_voice(
 
     files = {"audio": (audio.filename or "recording.webm", audio_bytes, audio.content_type or "audio/webm")}
     return await core_client.core_json(
-        config.INSIGHT_URL, "/transcribe", identity, "POST", files=files
+        config.AI_URL, "/transcribe", identity, "POST", files=files
     )
 
 

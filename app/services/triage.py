@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Prepare tenant-scoped report text for the generic DX-OS insight service."""
+"""Prepare tenant-scoped report data for the separate OpenCity AI service."""
 
 import logging
 from fastapi import HTTPException
@@ -68,7 +68,7 @@ async def generate_suggestion(report_id: str, identity: Caller) -> dict:
         for item in others[:150]
     ]
     analysis = await core_client.core_json(
-        config.INSIGHT_URL, "/analyze", identity, "POST",
+        config.AI_URL, "/analyze", identity, "POST",
         json_body={
             "text": report_text(target),
             "labels": sorted(config.VALID_UNITS),
@@ -82,11 +82,11 @@ async def generate_suggestion(report_id: str, identity: Caller) -> dict:
     ranked = analysis.get("ranked_labels")
     if (not isinstance(ranked, list) or not ranked or
             ranked[0].get("label") not in config.VALID_UNITS):
-        raise HTTPException(status_code=502, detail="Insight service returned an invalid unit")
+        raise HTTPException(status_code=502, detail="AI service returned an invalid unit")
     if not analysis.get("signals"):
         analysis["suggested_unit"] = "intake"
     urgency = await core_client.core_json(
-        config.INSIGHT_URL, "/analyze", identity, "POST",
+        config.AI_URL, "/analyze", identity, "POST",
         json_body={
             "text": report_text(target),
             "labels": ["high", "normal", "low"],
@@ -96,7 +96,7 @@ async def generate_suggestion(report_id: str, identity: Caller) -> dict:
     urgency_ranked = urgency.get("ranked_labels")
     if (not isinstance(urgency_ranked, list) or not urgency_ranked or
             urgency_ranked[0].get("label") not in {"high", "normal", "low"}):
-        raise HTTPException(status_code=502, detail="Insight service returned an invalid urgency")
+        raise HTTPException(status_code=502, detail="AI service returned an invalid urgency")
     analysis["urgency"] = urgency_ranked[0]["label"] if urgency.get("signals") else "normal"
     analysis["urgency_ranked"] = urgency_ranked
     return save_triage_suggestion(identity, report_id, record["updated_at"], analysis)

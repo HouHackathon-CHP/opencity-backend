@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 *.pyc
 .env
+data/*
+!data/export.geojson
+!data/tourism_osm.geojson
+!data/.gitkeep
+*.sqlite3
+*.db

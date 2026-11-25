@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Dispatcher-only insight and human review audit."""
+"""Dispatcher-only AI suggestions and human review audit."""
 
 import os
 import asyncio
@@ -28,7 +28,8 @@ def test_suggestion_is_scoped_and_dispatch_review_is_audited(monkeypatch, tmp_pa
         "id": "report-1", "kind": "field-report", "created_by": "citizen-1",
         "created_at": "2026-11-01T00:00:00+00:00", "updated_at": "2026-11-01T00:00:00+00:00",
         "payload": {"title": "Đèn đường hỏng", "description": "Đèn đường đã tắt nhiều ngày",
-                    "category": "Chiếu sáng", "address": "Phố thử nghiệm"},
+                    "category": "Chiếu sáng", "address": "Phố thử nghiệm",
+                    "latitude": 21.028, "longitude": 105.854},
     }
     other = {**record, "id": "report-2", "payload": {**record["payload"], "title": "Đèn đường không sáng"}}
     instance = {"id": "workflow-1", "definition_key": "report-handling",
@@ -49,7 +50,7 @@ def test_suggestion_is_scoped_and_dispatch_review_is_audited(monkeypatch, tmp_pa
             return {**instance, "state": "triaged"}
         if base == config.WORKFLOW_URL and path.endswith("/actions/assign"):
             return {**instance, "state": "assigned"}
-        if base == config.INSIGHT_URL and path == "/analyze":
+        if base == config.AI_URL and path == "/analyze":
             payload = kwargs["json_body"]
             if payload["labels"] == ["high", "normal", "low"]:
                 return {"ranked_labels": [{"label": "high", "score": 0.61},
@@ -57,6 +58,9 @@ def test_suggestion_is_scoped_and_dispatch_review_is_audited(monkeypatch, tmp_pa
                                           {"label": "low", "score": 0.09}]}
             assert payload["labels"] == sorted(config.VALID_UNITS)
             assert any(item["id"] == "report-2" for item in payload["candidates"])
+            assert payload["latitude"] == 21.028
+            assert payload["candidates"][0]["longitude"] == 105.854
+            assert payload["created_at"] == record["created_at"]
             return {
                 "model_version": "multinomial-nb-bow-v1",
                 "ranked_labels": [{"label": "infrastructure", "score": 0.78},
@@ -95,7 +99,7 @@ def test_suggestion_is_scoped_and_dispatch_review_is_audited(monkeypatch, tmp_pa
         "generated": 1, "reviewed": 1, "accepted": 0, "overridden": 1,
     }
     assert client.post("/reports/report-1/dispatch", headers=DISPATCHER, json=dispatch).status_code == 409
-    assert any(base == config.INSIGHT_URL for base, _, _ in calls)
+    assert any(base == config.AI_URL for base, _, _ in calls)
 
 
 def test_unknown_text_routes_to_manual_intake(monkeypatch):
@@ -110,7 +114,7 @@ def test_unknown_text_routes_to_manual_intake(monkeypatch):
     async def get_visible(*_):
         return [visible]
 
-    async def fake_insight(_base, _path, _identity, _method, *, json_body):
+    async def fake_ai(_base, _path, _identity, _method, *, json_body):
         labels = json_body["labels"]
         return {"ranked_labels": [{"label": label, "score": round(1 / len(labels), 4)}
                                   for label in labels], "signals": [], "similar": [],
@@ -118,7 +122,7 @@ def test_unknown_text_routes_to_manual_intake(monkeypatch):
 
     monkeypatch.setattr(triage_service, "get_report_record", get_record)
     monkeypatch.setattr(triage_service, "visible_report_views", get_visible)
-    monkeypatch.setattr(core_client, "core_json", fake_insight)
+    monkeypatch.setattr(core_client, "core_json", fake_ai)
     monkeypatch.setattr(triage_service, "save_triage_suggestion",
                         lambda _identity, _report_id, _updated, analysis: analysis)
     result = asyncio.run(triage_service.generate_suggestion(
@@ -187,7 +191,7 @@ def test_create_report_triggers_automatic_ai_triage(monkeypatch, tmp_path):
             if method == "POST":
                 return instance
             return [instance, dup_instance]
-        if base == config.INSIGHT_URL and path == "/analyze":
+        if base == config.AI_URL and path == "/analyze":
             payload = kwargs["json_body"]
             insight_called.append(payload)
             if payload["labels"] == ["high", "normal", "low"]:
@@ -264,7 +268,7 @@ def test_create_report_triggers_automatic_ai_triage(monkeypatch, tmp_path):
 
 def test_voice_transcribe_endpoint(monkeypatch):
     async def fake_voice(base, path, identity, method="GET", **kwargs):
-        assert base == config.INSIGHT_URL
+        assert base == config.AI_URL
         assert path == "/transcribe"
         assert method == "POST"
         assert "files" in kwargs

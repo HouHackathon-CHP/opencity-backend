@@ -7,28 +7,11 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from demo_accounts import ACCOUNTS, credentials
+
 
 ROOT = Path(__file__).resolve().parents[2]
-IDENTITY = "http://127.0.0.1:8081"
-ROLES = {
-    "dxos-dispatcher": "reports_dispatcher",
-    "dxos-reports": "reports_operator",
-    "dxos-reports-environment": "reports_operator",
-    "dxos-bulletins": "bulletins_operator",
-    "dxos-surveys": "surveys_operator",
-    "dxos-appointments": "appointments_operator",
-    "dxos-administrative-feedback": "administrative_feedback_operator",
-    "dxos-business-feedback": "business_feedback_operator",
-    "dxos-hotlines": "hotlines_operator",
-    "dxos-communications": "communications_operator",
-    "dxos-community": "community_groups_operator",
-    "dxos-social-feedback": "social_feedback_operator",
-    "dxos-digital-ward": "digital_ward_operator",
-}
-REPORT_UNITS = {
-    "dxos-reports": "infrastructure",
-    "dxos-reports-environment": "environment",
-}
+IDENTITY = "http://localhost:8081"
 
 
 def request(method: str, url: str, *, token: str | None = None, body: dict | list | None = None):
@@ -56,7 +39,10 @@ def require(status: int, expected: int, detail: object) -> None:
 
 def env_values() -> dict[str, str]:
     values = {}
-    for line in (ROOT / "dxos-core" / ".env").read_text(encoding="utf-8").splitlines():
+    core_env = ROOT / "dxos-core-main" / ".env"
+    if not core_env.exists():
+        core_env = ROOT / "dxos-core" / ".env"
+    for line in core_env.read_text(encoding="utf-8").splitlines():
         if line.strip() and not line.lstrip().startswith("#"):
             key, value = line.split("=", 1)
             values[key] = value
@@ -73,7 +59,11 @@ def admin_token(password: str) -> str:
 
 def provision() -> None:
     values = env_values()
-    password = values["DEMO_OPERATOR_PASSWORD"]
+    configured = {key: credentials(values, key) for key in ACCOUNTS
+                  if key != "ADMIN" or values.get("DEMO_ADMIN_PASSWORD")}
+    usernames = [username for username, _ in configured.values()]
+    if len(usernames) != len(set(usernames)):
+        raise ValueError("Demo account usernames must be unique")
     admin_password = values["KEYCLOAK_ADMIN_PASSWORD"]
     admin = admin_token(admin_password)
 
@@ -114,7 +104,9 @@ def provision() -> None:
                 },
             })
             require(status, 201, detail)
-    for username, role in ROLES.items():
+    managed_roles = {definition[1] for definition in ACCOUNTS.values()} | {"operator"}
+    for account, (username, password) in configured.items():
+        _, role, unit = ACCOUNTS[account]
         status, existing = authorized("GET", f"{base}/roles/{role}")
         if status == 404:
             status, detail = authorized("POST", f"{base}/roles",
@@ -128,8 +120,8 @@ def provision() -> None:
         status, users = authorized("GET", url)
         require(status, 200, users)
         attributes = {"tenant_id": ["demo"]}
-        if username in REPORT_UNITS:
-            attributes["unit_id"] = [REPORT_UNITS[username]]
+        if unit:
+            attributes["unit_id"] = [unit]
         if not users:
             status, detail = authorized("POST", f"{base}/users", body={
                 "username": username, "enabled": True, "firstName": "OpenCity",
@@ -140,6 +132,14 @@ def provision() -> None:
             status, users = authorized("GET", url)
             require(status, 200, users)
         user_id = users[0]["id"]
+        # Staff accounts are created by the Admin API and must not retain the
+        # default self-registration group or its citizen role.
+        status, user_groups = authorized("GET", f"{base}/users/{user_id}/groups")
+        require(status, 200, user_groups)
+        for group in user_groups:
+            if group["name"] == "citizens-demo":
+                status, detail = authorized("DELETE", f"{base}/users/{user_id}/groups/{group['id']}")
+                require(status, 204, detail)
         status, detail = authorized("PUT", f"{base}/users/{user_id}", body={
             "username": username, "enabled": True, "firstName": "OpenCity",
             "lastName": role, "email": f"{username}@example.invalid", "emailVerified": True,
@@ -152,14 +152,14 @@ def provision() -> None:
         require(status, 204, detail)
         status, current_roles = authorized("GET", f"{base}/users/{user_id}/role-mappings/realm")
         require(status, 200, current_roles)
-        stale = [item for item in current_roles if item["name"] in set(ROLES.values()) | {"operator", "admin"} and item["name"] != role]
+        stale = [item for item in current_roles if item["name"] in managed_roles and item["name"] != role]
         if stale:
             status, detail = authorized("DELETE", f"{base}/users/{user_id}/role-mappings/realm", body=stale)
             require(status, 204, detail)
         if role not in {item["name"] for item in current_roles}:
             status, detail = authorized("POST", f"{base}/users/{user_id}/role-mappings/realm", body=[role_data])
             require(status, 204, detail)
-    print("OpenCity role accounts are ready: " + ", ".join(ROLES))
+    print("OpenCity role accounts are ready: " + ", ".join(usernames))
 
 
 if __name__ == "__main__":
