@@ -55,9 +55,63 @@ def air_quality_db() -> sqlite3.Connection:
     return connection
 
 
+DEFAULT_HANOI_STATIONS = [
+    {"code": "HN-HOANKIEM", "name": "Trạm Hoàn Kiếm", "address": "Phố Hàng Đậu, Hoàn Kiếm, Hà Nội", "area_type": "Đô thị trung tâm", "latitude": 21.039, "longitude": 105.849, "base_aqi": 65, "base_pm25": 22.4, "base_pm10": 45.0},
+    {"code": "HN-BADINH", "name": "Trạm Ba Đình", "address": "Phố Đội Cấn, Ba Đình, Hà Nội", "area_type": "Đô thị mật độ cao", "latitude": 21.034, "longitude": 105.819, "base_aqi": 58, "base_pm25": 19.8, "base_pm10": 38.5},
+    {"code": "HN-TAYHO", "name": "Trạm Tây Hồ", "address": "Đường Lạc Long Quân, Tây Hồ, Hà Nội", "area_type": "Sinh thái ven hồ", "latitude": 21.066, "longitude": 105.815, "base_aqi": 42, "base_pm25": 14.0, "base_pm10": 28.0},
+    {"code": "HN-DONGDA", "name": "Trạm Đống Đa", "address": "Đường Nguyễn Lương Bằng, Đống Đa, Hà Nội", "area_type": "Giao thông đô thị", "latitude": 21.018, "longitude": 105.828, "base_aqi": 88, "base_pm25": 32.5, "base_pm10": 62.0},
+    {"code": "HN-CAUGIAY", "name": "Trạm Cầu Giấy", "address": "Đường Cầu Giấy, Cầu Giấy, Hà Nội", "area_type": "Trục giao thông chính", "latitude": 21.035, "longitude": 105.792, "base_aqi": 112, "base_pm25": 42.0, "base_pm10": 84.0},
+    {"code": "HN-HAIBATRUNG", "name": "Trạm Hai Bà Trưng", "address": "Phố Bà Triệu, Hai Bà Trưng, Hà Nội", "area_type": "Thương mại - Dịch vụ", "latitude": 21.012, "longitude": 105.850, "base_aqi": 72, "base_pm25": 25.0, "base_pm10": 50.0},
+    {"code": "HN-LONGHIEN", "name": "Trạm Long Biên", "address": "Đường Ngô Gia Tự, Long Biên, Hà Nội", "area_type": "Dân cư sinh thái", "latitude": 21.055, "longitude": 105.892, "base_aqi": 48, "base_pm25": 16.2, "base_pm10": 32.0},
+    {"code": "HN-HADONG", "name": "Trạm Hà Đông", "address": "Đường Quang Trung, Hà Đông, Hà Nội", "area_type": "Đô thị mở rộng", "latitude": 20.972, "longitude": 105.776, "base_aqi": 95, "base_pm25": 35.0, "base_pm10": 68.0},
+]
+
+
 def ensure_tenant_seed(connection: sqlite3.Connection, tenant: str) -> None:
-    """Dynamic storage - stations and telemetry are managed via API and live sensors."""
-    pass
+    """Seed initial monitoring stations for demo tenant when empty."""
+    if tenant != "demo":
+        return
+    existing = connection.execute("SELECT COUNT(*) FROM air_stations WHERE tenant = ?", (tenant,)).fetchone()[0]
+    if existing > 0:
+        return
+    from datetime import timedelta
+    now_dt = datetime.now(timezone.utc)
+    for s in DEFAULT_HANOI_STATIONS:
+        insert_station(
+            connection,
+            tenant=tenant,
+            code=s["code"],
+            name=s["name"],
+            address=s["address"],
+            area_type=s["area_type"],
+            latitude=s["latitude"],
+            longitude=s["longitude"],
+            status="active",
+            created_at=now_dt.isoformat(),
+        )
+        for h in range(24, -1, -1):
+            rec_dt = now_dt - timedelta(hours=h)
+            variance = ((h * 7 + int(s["latitude"] * 100)) % 15) - 7
+            aqi = max(15, s["base_aqi"] + variance)
+            pm25 = max(5.0, s["base_pm25"] + variance * 0.4)
+            pm10 = max(10.0, s["base_pm10"] + variance * 0.7)
+            insert_reading(
+                connection,
+                reading_id=str(uuid4()),
+                tenant=tenant,
+                station_code=s["code"],
+                aqi=aqi,
+                pm25=pm25,
+                pm10=pm10,
+                temperature=round(26.0 + variance * 0.15, 1),
+                humidity=round(68.0 - variance * 0.3, 1),
+                co=round(0.8 + variance * 0.02, 2),
+                no2=round(28.0 + variance * 0.5, 1),
+                o3=round(45.0 + variance * 0.8, 1),
+                so2=round(12.0 + variance * 0.2, 1),
+                note="Dữ liệu quan trắc tự động QCVN 05:2023/BTNMT",
+                recorded_at=rec_dt.isoformat(),
+            )
 
 
 def list_stations(connection: sqlite3.Connection, tenant: str) -> list[sqlite3.Row]:
