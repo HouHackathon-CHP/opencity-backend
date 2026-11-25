@@ -8,7 +8,7 @@ import sqlite3
 import unicodedata
 from typing import Any
 
-from app.schemas.ward import DistrictSummary, WardDetail, WardLocateResult, WardSummary
+from app.schemas.ward import DistrictSummary, WardDetail, WardLocateResult, WardSummary, WardUpdateInput
 
 WARDS_DB_PATH = os.getenv("WARDS_DB_PATH", "data/wards.sqlite3")
 WARDS_BOUNDARIES_PATH = os.getenv("WARDS_BOUNDARIES_PATH", "data/wards_boundaries.geojson")
@@ -270,3 +270,49 @@ def locate_ward(lat: float, lon: float) -> WardLocateResult | None:
             return WardLocateResult(ward=detail, distance_km=dist, located_inside=False)
 
     return None
+
+
+def update_ward(ward_id: str, data: WardUpdateInput) -> WardDetail | None:
+    with closing(_db_connection()) as conn:
+        with conn:
+            updates: list[str] = []
+            params: list[Any] = []
+            if data.office_address is not None:
+                updates.append("office_address = ?")
+                params.append(data.office_address.strip())
+            if data.phone is not None:
+                updates.append("phone = ?")
+                params.append(data.phone.strip())
+            if data.office_hours is not None:
+                updates.append("office_hours = ?")
+                params.append(data.office_hours.strip())
+            if data.population is not None:
+                updates.append("population = ?")
+                params.append(int(data.population))
+
+            if updates:
+                params.append(str(ward_id))
+                params.append(str(ward_id))
+                conn.execute(f"UPDATE wards SET {', '.join(updates)} WHERE id = ? OR code = ?", params)
+
+    # Also update in-memory boundaries cache if present
+    global _BOUNDARIES_CACHE
+    if _BOUNDARIES_CACHE is not None:
+        for feat in _BOUNDARIES_CACHE.get("features", []):
+            fid = str(feat.get("id") or feat.get("properties", {}).get("code") or "")
+            if fid == str(ward_id):
+                props = feat.setdefault("properties", {})
+                if data.office_address is not None:
+                    props["officeAddress"] = data.office_address.strip()
+                if data.phone is not None:
+                    props["phone"] = data.phone.strip()
+                if data.office_hours is not None:
+                    props["officeHours"] = data.office_hours.strip()
+                if data.population is not None:
+                    props["population"] = int(data.population)
+                break
+
+    updated = get_ward_by_id(ward_id)
+    if updated and data.services_list is not None:
+        updated.services_list = data.services_list
+    return updated

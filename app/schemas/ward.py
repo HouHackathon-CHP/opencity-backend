@@ -56,3 +56,11 @@ class WardLocateResult(BaseModel):
     ward: WardDetail
     distance_km: float
     located_inside: bool = True
+
+
+class WardUpdateInput(BaseModel):
+    office_address: str | None = None
+    phone: str | None = None
+    office_hours: str | None = None
+    population: int | None = None
+    services_list: list[str] | None = None

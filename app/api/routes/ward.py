@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.schemas.ward import DistrictSummary, WardDetail, WardLocateResult, WardSummary
+from app.core.security import Caller, caller
+from app.schemas.ward import DistrictSummary, WardDetail, WardLocateResult, WardSummary, WardUpdateInput
 from app.services import ward as service
 
 router = APIRouter(prefix="/wards", tags=["wards"])
@@ -56,3 +57,21 @@ def get_ward_detail(ward_id: str) -> WardDetail:
     if not ward:
         raise HTTPException(status_code=404, detail="Không tìm thấy phường/xã")
     return ward
+
+
+@router.put("/{ward_id}", response_model=WardDetail)
+def update_ward(
+    ward_id: str,
+    body: WardUpdateInput,
+    identity: Caller = Depends(caller),
+) -> WardDetail:
+    if "admin" not in identity.roles and "digital_ward_operator" not in identity.roles:
+        raise HTTPException(
+            status_code=403,
+            detail="Chỉ có Quản trị viên (admin) hoặc Cán bộ Xã/Phường mới có quyền cập nhật thông tin",
+        )
+    updated = service.update_ward(ward_id, body)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phường/xã")
+    return updated
+

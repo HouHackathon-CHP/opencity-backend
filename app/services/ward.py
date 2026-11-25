@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any
 from app.repositories import ward as repo
-from app.schemas.ward import DistrictSummary, WardDetail, WardLocateResult, WardSummary
+from app.schemas.ward import DistrictSummary, WardDetail, WardLocateResult, WardSummary, WardUpdateInput
 
 
 def list_wards(
@@ -38,3 +38,8 @@ def locate_ward(lat: float, lon: float) -> WardLocateResult | None:
 
 def get_boundaries() -> dict[str, Any]:
     return repo.get_boundaries()
+
+
+def update_ward(ward_id: str, data: WardUpdateInput) -> WardDetail | None:
+    return repo.update_ward(ward_id, data)
+
