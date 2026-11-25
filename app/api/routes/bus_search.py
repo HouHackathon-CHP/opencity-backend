@@ -90,6 +90,22 @@ def find_bus_routes(
     )
 
 
+@router.get("/walk-route")
+def get_walking_route(
+    from_lat: float = Query(...),
+    from_lng: float = Query(...),
+    to_lat: float = Query(...),
+    to_lng: float = Query(...),
+    identity: Caller = Depends(caller),
+) -> dict:
+    return service.get_walking_route(
+        from_lat=from_lat,
+        from_lng=from_lng,
+        to_lat=to_lat,
+        to_lng=to_lng,
+    )
+
+
 @router.get("/audit", response_model=BusAuditReport)
 def get_audit_report(
     identity: Caller = Depends(caller),

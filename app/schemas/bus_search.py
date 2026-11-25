@@ -103,6 +103,8 @@ class RouteRecommendation(BaseModel):
     second_route_number: str | None = None
     second_board_stop: RouteStopRef | None = None
     second_alight_stop: RouteStopRef | None = None
+    co2_saved_grams: int = 150
+    is_electric: bool = False
 
 
 class BusImportInput(BaseModel):
