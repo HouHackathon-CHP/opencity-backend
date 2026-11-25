@@ -2,7 +2,6 @@
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
 from app.core import config
 
@@ -30,7 +29,7 @@ def air_quality_db() -> sqlite3.Connection:
             station_code TEXT NOT NULL,
             tenant TEXT NOT NULL,
             aqi INTEGER NOT NULL,
-            pm25 REAL NOT NULL,
+            pm25 REAL,
             pm10 REAL,
             temperature REAL,
             humidity REAL,
@@ -52,11 +51,30 @@ def air_quality_db() -> sqlite3.Connection:
         connection.execute("ALTER TABLE air_stations ADD COLUMN status TEXT DEFAULT 'active'")
     except sqlite3.OperationalError:
         pass
+    pm25_column = next(
+        column for column in connection.execute("PRAGMA table_info(air_readings)")
+        if column["name"] == "pm25"
+    )
+    if pm25_column["notnull"]:
+        # Older databases required a PM2.5 value, even when WAQI did not supply one.
+        with connection:
+            connection.execute("ALTER TABLE air_readings RENAME TO air_readings_old")
+            connection.execute("""
+                CREATE TABLE air_readings (
+                    id TEXT PRIMARY KEY, station_code TEXT NOT NULL, tenant TEXT NOT NULL,
+                    aqi INTEGER NOT NULL, pm25 REAL, pm10 REAL, temperature REAL,
+                    humidity REAL, co REAL, no2 REAL, o3 REAL, so2 REAL,
+                    note TEXT, recorded_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("INSERT INTO air_readings SELECT * FROM air_readings_old")
+            connection.execute("DROP TABLE air_readings_old")
+            connection.execute("CREATE INDEX air_readings_lookup ON air_readings(tenant, station_code, recorded_at DESC)")
     return connection
 
 
 def ensure_tenant_seed(connection: sqlite3.Connection, tenant: str) -> None:
-    """Dynamic storage - stations and telemetry are managed via API and live sensors."""
+    """Compatibility hook; stations now come from WAQI or operator input."""
     pass
 
 
@@ -92,6 +110,20 @@ def insert_station(
             (code, tenant, name, address, area_type, latitude, longitude, status, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (code, tenant, name, address, area_type, latitude, longitude, status, now_iso))
+
+
+def upsert_waqi_station(
+    connection: sqlite3.Connection, tenant: str, code: str, name: str,
+    address: str, latitude: float, longitude: float,
+) -> None:
+    connection.execute("""
+        INSERT INTO air_stations
+            (code, tenant, name, address, area_type, latitude, longitude, status, created_at)
+        VALUES (?, ?, ?, ?, 'WAQI', ?, ?, 'active', ?)
+        ON CONFLICT(tenant, code) DO UPDATE SET
+            name=excluded.name, address=excluded.address,
+            latitude=excluded.latitude, longitude=excluded.longitude
+    """, (code, tenant, name, address, latitude, longitude, datetime.now(timezone.utc).isoformat()))
 
 
 def update_station_status(
@@ -140,7 +172,7 @@ def insert_reading(
     tenant: str,
     station_code: str,
     aqi: int,
-    pm25: float,
+    pm25: float | None,
     pm10: float | None,
     temperature: float | None,
     humidity: float | None,
