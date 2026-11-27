@@ -56,10 +56,38 @@ jobs:
             exit 1
           fi
           mkdir -p ~/.ssh
-          printf '%s\n' "$SERVER_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          if ! ssh-keygen -y -P "" -f ~/.ssh/deploy_key >/dev/null 2>&1; then
-            echo "::error::Invalid OpenSSH private key in secret (check BEGIN/END OPENSSH PRIVATE KEY lines, no .pub key or wrapped lines)."
+          python3 - <<'PY'
+          import base64, os, pathlib, re, textwrap
+          raw = os.environ["SERVER_SSH_KEY"].replace("\x00", "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").strip()
+          if "BEGIN " not in raw and "\n" not in raw and len(raw) > 100:
+              try:
+                  dec = base64.b64decode(raw, validate=True).decode("utf-8", errors="ignore").replace("\r", "").strip()
+                  if "BEGIN " in dec:
+                      raw = dec
+              except Exception:
+                  pass
+          block = re.search(r"(-----BEGIN [A-Z0-9 ]+-----.*?-----END [A-Z0-9 ]+-----)", raw, flags=re.S)
+          if block:
+              raw = block.group(1)
+          m = re.fullmatch(r"(-----BEGIN [A-Z0-9 ]+-----)\s+(.+?)\s+(-----END [A-Z0-9 ]+-----)", raw, flags=re.S)
+          if m and "\n" not in m.group(2):
+              parts = m.group(2).split()
+              body = "\n".join(parts) if len(parts) > 1 else "\n".join(textwrap.wrap(parts[0], 70))
+              raw = f"{m.group(1)}\n{body}\n{m.group(3)}"
+          raw = "\n".join(line.strip() for line in raw.splitlines() if line.strip()) + "\n"
+          p = pathlib.Path(os.path.expanduser("~/.ssh/deploy_key"))
+          p.write_text(raw, encoding="utf-8")
+          p.chmod(0o600)
+          PY
+          if ! err=$(ssh-keygen -y -P "" -f ~/.ssh/deploy_key 2>&1 >/dev/null); then
+            lines=$(wc -l < ~/.ssh/deploy_key)
+            bytes=$(wc -c < ~/.ssh/deploy_key)
+            max_line=$(awk '{if (length>m) m=length} END{print m+0}' ~/.ssh/deploy_key)
+            has_begin=$(grep -c '^-----BEGIN ' ~/.ssh/deploy_key || true)
+            has_end=$(grep -c '^-----END ' ~/.ssh/deploy_key || true)
+            is_pub=$(grep -cE '^(ssh-|ecdsa-)' ~/.ssh/deploy_key || true)
+            err_clean=$(printf '%s' "$err" | tr '\n' ' ')
+            echo "::error::Invalid OpenSSH private key (${err_clean}): lines=${lines}, bytes=${bytes}, max_line=${max_line}, begin=${has_begin}, end=${has_end}, pub=${is_pub}"
             exit 1
           fi
           ssh -i ~/.ssh/deploy_key -p "$SERVER_PORT" \
