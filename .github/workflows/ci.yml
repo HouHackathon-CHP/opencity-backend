@@ -45,7 +45,7 @@ jobs:
     steps:
       - name: Deploy opencity-backend over SSH
         env:
-          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY || secrets.OPENCITY_BACKEND }}
           SERVER_HOST: ${{ secrets.SERVER_HOST || vars.SERVER_HOST || '118.70.222.137' }}
           SERVER_PORT: ${{ secrets.SERVER_PORT || vars.SERVER_PORT || '2222' }}
           SERVER_USER: ${{ secrets.SERVER_USER || vars.SERVER_USER || 'chp' }}
