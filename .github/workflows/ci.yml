@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-name: OpenCity Backend CI
+name: OpenCity Backend CI/CD
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Branch or tag to deploy on server"
+        required: false
+        default: "main"
 
 jobs:
   tests:
@@ -17,3 +23,43 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: python scripts/check_direct_licenses.py
       - run: python -m pytest -q
+
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    needs: tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: opencity-backend:latest
+
+  deploy:
+    name: Deploy to Production Server
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Deploy opencity-backend over SSH
+        env:
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST || vars.SERVER_HOST || '118.70.222.137' }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT || vars.SERVER_PORT || '2222' }}
+          SERVER_USER: ${{ secrets.SERVER_USER || vars.SERVER_USER || 'chp' }}
+          TARGET_REF: ${{ inputs.target_ref || github.ref_name || 'main' }}
+        run: |
+          if [ -z "$SERVER_SSH_KEY" ]; then
+            echo "Skipping CD: SERVER_SSH_KEY secret is not configured."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -p "$SERVER_PORT" \
+            -o StrictHostKeyChecking=accept-new \
+            -o BatchMode=yes \
+            "${SERVER_USER}@${SERVER_HOST}" \
+            "~/opencity/redeploy.sh backend ${TARGET_REF}"
