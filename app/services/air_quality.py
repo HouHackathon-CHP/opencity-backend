@@ -110,7 +110,13 @@ def format_station_payload(station_row, latest_reading_row) -> dict:
         return {
             **station_dict,
             "latest_reading": None,
-            "classification": None,
+            "classification": {
+                "level": "unknown", "label": "Chưa có dữ liệu",
+                "color": "#64748b", "bg_color": "rgba(100, 116, 139, 0.15)",
+                "health_effect": "Trạm chưa công bố AQI hiện tại.",
+                "advice_general": "Xem các trạm khác trong khu vực.",
+                "advice_sensitive": "", "recommendations": [],
+            },
         }
 
     reading_dict = dict(latest_reading_row)
@@ -123,7 +129,9 @@ def format_station_payload(station_row, latest_reading_row) -> dict:
 
 
 def ensure_fresh_readings(tenant: str) -> None:
-    """Automatically ensure readings are kept fresh from WAQI without manual intervention."""
+    """Refresh WAQI stations after 15 minutes, including anonymous reads."""
+    if tenant != "demo":
+        return
     try:
         from app.services import waqi
         token = waqi.get_effective_waqi_token()
@@ -131,22 +139,18 @@ def ensure_fresh_readings(tenant: str) -> None:
             return
 
         with closing(repo.air_quality_db()) as connection:
-            row = connection.execute(
-                "SELECT recorded_at FROM air_readings WHERE tenant = ? ORDER BY recorded_at DESC LIMIT 1",
-                (tenant,),
-            ).fetchone()
-            if row and row["recorded_at"]:
-                last_dt = datetime.fromisoformat(row["recorded_at"])
+            last_sync = repo.get_config(connection, f"waqi_last_sync_at:{tenant}")
+            if last_sync:
+                last_dt = datetime.fromisoformat(last_sync)
                 if datetime.now(timezone.utc) - last_dt < timedelta(minutes=15):
                     return
-        waqi.sync_all_stations(tenant)
+        waqi.sync_all_stations(tenant, only_if_stale=True)
     except Exception as exc:
         logger.warning(f"Auto-sync air quality readings failed: {exc}")
 
 
 def get_city_summary(identity: Caller) -> dict:
-    if "public" not in identity.roles:
-        ensure_fresh_readings(identity.tenant)
+    ensure_fresh_readings(identity.tenant)
     with closing(repo.air_quality_db()) as connection:
         repo.ensure_tenant_seed(connection, identity.tenant)
         stations = repo.list_stations(connection, identity.tenant)
@@ -216,8 +220,7 @@ def get_city_summary(identity: Caller) -> dict:
 
 
 def list_stations(identity: Caller) -> list[dict]:
-    if "public" not in identity.roles:
-        ensure_fresh_readings(identity.tenant)
+    ensure_fresh_readings(identity.tenant)
     with closing(repo.air_quality_db()) as connection:
         repo.ensure_tenant_seed(connection, identity.tenant)
         stations = repo.list_stations(connection, identity.tenant)
@@ -233,6 +236,7 @@ def list_stations(identity: Caller) -> list[dict]:
 
 
 def get_station_detail(code: str, identity: Caller) -> dict:
+    ensure_fresh_readings(identity.tenant)
     with closing(repo.air_quality_db()) as connection:
         repo.ensure_tenant_seed(connection, identity.tenant)
         station = repo.get_station(connection, identity.tenant, code)
@@ -327,7 +331,6 @@ def create_station(body: StationInput, identity: Caller) -> dict:
         if existing:
             raise HTTPException(status_code=409, detail=f"Mã trạm '{code}' đã tồn tại trong mạng lưới.")
 
-        now_utc = datetime.now(timezone.utc)
         with connection:
             repo.insert_station(
                 connection,
@@ -339,24 +342,7 @@ def create_station(body: StationInput, identity: Caller) -> dict:
                 latitude=body.latitude,
                 longitude=body.longitude,
                 status="active",
-                created_at=now_utc.isoformat(),
-            )
-            repo.insert_reading(
-                connection,
-                reading_id=str(uuid4()),
-                tenant=identity.tenant,
-                station_code=code,
-                aqi=45,
-                pm25=11.5,
-                pm10=20.0,
-                temperature=28.0,
-                humidity=68.0,
-                co=0.8,
-                no2=22.0,
-                o3=38.0,
-                so2=10.0,
-                note="Trạm mới đưa vào vận hành mạng lưới đô thị",
-                recorded_at=now_utc.isoformat(),
+                created_at=datetime.now(timezone.utc).isoformat(),
             )
         st = repo.get_station(connection, identity.tenant, code)
         latest_rd = repo.get_latest_reading(connection, identity.tenant, code)
