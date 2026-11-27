@@ -75,6 +75,7 @@ def air_quality_db() -> sqlite3.Connection:
 
 def ensure_tenant_seed(connection: sqlite3.Connection, tenant: str) -> None:
     """Compatibility hook; stations now come from WAQI or operator input."""
+    pass
 
 
 def list_stations(connection: sqlite3.Connection, tenant: str) -> list[sqlite3.Row]:
