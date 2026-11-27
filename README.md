@@ -28,7 +28,7 @@ DX-OS integration. See
 
 ## Local stack
 
-Keep `dxos-core`, `opencity-frontend` and `opencity-backend` as sibling directories. Install Docker Desktop and Python 3.10+, and start the Docker Linux engine. Create `dxos-core/.env` from its `.env.example` if this is a fresh setup, then replace the example secrets; retain an existing `.env` if you already use the stack. From the `opencity-backend` directory:
+Keep `dxos-core`, `opencity-backend`, `opencity-ai`, and `opencity-frontend` as sibling directories. The AI repo uses Git LFS for model weights; run `git lfs pull` in `opencity-ai` before building the combined stack. Install Docker Desktop and Python 3.10+, and start the Docker Linux engine. Create `dxos-core/.env` from its `.env.example` if this is a fresh setup, then replace the example secrets; retain an existing `.env` if you already use the stack. From the `opencity-backend` directory:
 
 ```powershell
 docker compose --env-file ..\dxos-core\.env -f ..\dxos-core\compose.yaml -f compose.stack.yaml up --build -d
@@ -116,7 +116,7 @@ through Keycloak and the DX-OS gateway. It reuses clearly marked demo records.
 
 The gateway prefixes these with `/api/opencity`.
 
-The triage service calls the internal DX-OS `insight` module with report text, curated examples, prior assignments and similar-case candidates from the same tenant. Results and a final unit review are saved in the report-routing SQLite database. The dispatcher can change the suggested unit and must set a deadline. When text provides no matching signal, the suggestion falls back to general intake and normal attention for manual review. The attention level is advisory and does not alter SLA rules. Text scores are relative rankings, not calibrated confidence; image contents are not analyzed.
+The triage service calls the separate internal [OpenCity AI](https://github.com/HouHackathon-CHP/opencity-ai) service with report text, location and time, curated examples, prior assignments and similar-case candidates from the same tenant. Results and a final unit review are saved in the report-routing SQLite database. The dispatcher can change the suggested unit and must set a deadline. When text provides no matching signal, the suggestion falls back to general intake and normal attention for manual review. The attention level is advisory and does not alter SLA rules. Text scores are relative rankings, not calibrated confidence; image contents are not analyzed. The backend sends only reports visible to the dispatcher; the AI service is internal to Compose and requires the shared service secret.
 
 `seed_dashboard_demo.py` inserts five `[DEMO SLA]` reports at different Hanoi coordinates, dispatches four of them with different future deadlines, and leaves one awaiting dispatch. It is idempotent. The short deadlines become overdue naturally if the stack remains running; the script never rewrites existing deadlines.
 
