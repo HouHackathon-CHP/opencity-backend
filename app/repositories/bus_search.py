@@ -7,11 +7,14 @@ import os
 from pathlib import Path
 import sqlite3
 import sys
+from threading import Lock
 from typing import Any
 import unicodedata
 import uuid
 
 from app.core import config
+
+_seed_lock = Lock()
 
 def _unaccent(s: str | None) -> str:
     if not s:
@@ -35,7 +38,7 @@ def _db_connection() -> sqlite3.Connection:
     return conn
 
 
-def init_db() -> None:
+def init_db(seed_if_empty: bool = True) -> None:
     with closing(_db_connection()) as conn, conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS bus_routes (
@@ -91,24 +94,29 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_bus_route_stops_route ON bus_route_stops(route_id, direction)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_bus_route_stops_stop ON bus_route_stops(stop_id)")
 
-        row = conn.execute("SELECT count(*) FROM bus_routes").fetchone()
-        is_testing = "pytest" in sys.modules or bool(os.getenv("PYTEST_CURRENT_TEST"))
-        if row and row[0] == 0 and not is_testing:
-            data_dir = Path(config.BUS_SEARCH_DB_PATH).parent
-            candidate_paths = [
-                data_dir / "bus_osm.geojson",
-                data_dir / "export.geojson",
-                Path(__file__).resolve().parents[2] / "data" / "bus_osm.geojson",
-                Path(__file__).resolve().parents[2] / "data" / "export.geojson",
-            ]
-            geojson_path = next((p for p in candidate_paths if p.exists()), None)
-            if geojson_path:
-                try:
-                    with open(geojson_path, "r", encoding="utf-8") as f:
-                        geo_data = json.load(f)
-                    import_osm_geojson(geo_data, replace_existing=False)
-                except Exception:
-                    pass
+    if not seed_if_empty or "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        return
+
+    data_dir = Path(config.BUS_SEARCH_DB_PATH).parent
+    repo_root = Path(__file__).resolve().parents[2]
+    candidate_paths = [
+        repo_root / "seed" / "bus_osm.geojson",
+        repo_root / "seed" / "export.geojson",
+        data_dir / "bus_osm.geojson",
+        data_dir / "export.geojson",
+        repo_root / "data" / "bus_osm.geojson",
+        repo_root / "data" / "export.geojson",
+    ]
+    seed_path = next((p for p in candidate_paths if p.exists()), None)
+    if not seed_path:
+        return
+
+    with _seed_lock:
+        with closing(_db_connection()) as conn:
+            if conn.execute("SELECT count(*) FROM bus_routes").fetchone()[0]:
+                return
+        with seed_path.open("r", encoding="utf-8") as f:
+            import_osm_geojson(json.load(f), replace_existing=False)
 
 
 def list_routes(
@@ -478,6 +486,11 @@ def find_bus_connections(
                         d_stop["latitude"],
                         d_stop["longitude"],
                     )
+                    direct_dist_km = _haversine_distance_km(o_stop["latitude"], o_stop["longitude"], d_stop["latitude"], d_stop["longitude"])
+                    direct_co2 = max(80, int(round(max(direct_dist_km * 1.3, stops_count * 0.8) * 115)))
+                    op_str = str(m["operator"]) if "operator" in m.keys() and m["operator"] else ""
+                    is_elec = str(m["route_number"]).upper().startswith("E") or "vinbus" in op_str.lower()
+
                     rec = {
                         "type": "direct",
                         "route_number": m["route_number"],
@@ -505,6 +518,8 @@ def find_bus_connections(
                         "direction": m["direction"],
                         "path_segment": sliced_path,
                         "trip_stops": trip_stops,
+                        "co2_saved_grams": direct_co2,
+                        "is_electric": is_elec,
                     }
 
                     span = m["alight_order"] - m["board_order"]
@@ -593,6 +608,11 @@ def find_bus_connections(
                         seg2 = _slice_path_between_stops(r2_full, tm["t_lat"], tm["t_lng"], d_stop["latitude"], d_stop["longitude"])
                         combined_path = seg1 + seg2
 
+                        t_dist1 = _haversine_distance_km(o_stop["latitude"], o_stop["longitude"], tm["t_lat"], tm["t_lng"])
+                        t_dist2 = _haversine_distance_km(tm["t_lat"], tm["t_lng"], d_stop["latitude"], d_stop["longitude"])
+                        t_co2 = max(150, int(round(max((t_dist1 + t_dist2) * 1.3, total_stops * 0.8) * 115)))
+                        t_elec = str(tm["r1_num"]).upper().startswith("E") or str(tm["r2_num"]).upper().startswith("E")
+
                         recommendations.append({
                             "type": "transfer",
                             "route_number": tm["r1_num"],
@@ -645,6 +665,8 @@ def find_bus_connections(
                                 "longitude": d_stop["longitude"],
                                 "stop_order": tm["r2_alight_order"],
                             },
+                            "co2_saved_grams": t_co2,
+                            "is_electric": t_elec,
                         })
 
         recommendations.sort(key=lambda r: (0 if r["type"] == "direct" else 1, r["estimated_minutes"]))
@@ -882,7 +904,7 @@ def _chain_multilinestring_segments(segments: list[list[list[float]]]) -> list[l
 def import_osm_geojson(data: dict, replace_existing: bool = False) -> tuple[int, int]:
     """Import OpenStreetMap GeoJSON feature collection with bidirectional route separation and stop linking."""
     from collections import defaultdict
-    init_db()
+    init_db(seed_if_empty=False)
     features = data.get("features", [])
     now_str = datetime.now(timezone.utc).isoformat()
 
@@ -1289,5 +1311,64 @@ def delete_stop(stop_id: str) -> bool:
         conn.execute("DELETE FROM bus_route_stops WHERE stop_id = ?", (stop_id,))
         cur = conn.execute("DELETE FROM bus_stops WHERE id = ?", (stop_id,))
         return cur.rowcount > 0
+
+
+_WALK_CACHE: dict[str, dict] = {}
+
+
+def get_walking_route(
+    from_lat: float,
+    from_lng: float,
+    to_lat: float,
+    to_lng: float,
+) -> dict:
+    key = f"{from_lat:.5f},{from_lng:.5f}->{to_lat:.5f},{to_lng:.5f}"
+    if key in _WALK_CACHE:
+        return _WALK_CACHE[key]
+
+    direct_dist_km = _haversine_distance_km(from_lat, from_lng, to_lat, to_lng)
+    if direct_dist_km < 0.015:
+        res = {
+            "status": "ok",
+            "distance_m": round(direct_dist_km * 1000),
+            "duration_s": max(10, round(direct_dist_km * 1000 / 1.2)),
+            "coordinates": [[from_lng, from_lat], [to_lng, to_lat]],
+        }
+        _WALK_CACHE[key] = res
+        return res
+
+    try:
+        import httpx
+        url = f"https://router.project-osrm.org/route/v1/foot/{from_lng:.6f},{from_lat:.6f};{to_lng:.6f},{to_lat:.6f}?overview=full&geometries=geojson"
+        with httpx.Client(timeout=4.0) as client:
+            resp = client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "Ok" and data.get("routes"):
+                    r = data["routes"][0]
+                    coords = r.get("geometry", {}).get("coordinates", [])
+                    if coords:
+                        res = {
+                            "status": "ok",
+                            "distance_m": round(r.get("distance", direct_dist_km * 1000)),
+                            "duration_s": round(r.get("duration", direct_dist_km * 1000 / 1.2)),
+                            "coordinates": coords,
+                        }
+                        if len(_WALK_CACHE) > 500:
+                            _WALK_CACHE.clear()
+                        _WALK_CACHE[key] = res
+                        return res
+    except Exception:
+        pass
+
+    res = {
+        "status": "fallback",
+        "distance_m": round(direct_dist_km * 1000),
+        "duration_s": max(20, round(direct_dist_km * 1000 / 1.2)),
+        "coordinates": [[from_lng, from_lat], [to_lng, to_lat]],
+    }
+    _WALK_CACHE[key] = res
+    return res
+
 
 

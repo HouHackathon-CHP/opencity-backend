@@ -33,7 +33,7 @@ app/
     business_feedback.py  Business petition request models
   services/
     reports.py              Report visibility, views and SLA aggregation
-    triage.py               Tenant-scoped examples and insight integration
+    triage.py               Tenant-scoped examples and OpenCity AI integration
     notifications.py        Recipients, read views and deadline reminders
     appointments.py         Appointment rules and transactions
     administrative_feedback.py  Procedure feedback state transitions

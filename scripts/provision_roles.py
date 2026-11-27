@@ -132,6 +132,14 @@ def provision() -> None:
             status, users = authorized("GET", url)
             require(status, 200, users)
         user_id = users[0]["id"]
+        # Staff accounts are created by the Admin API and must not retain the
+        # default self-registration group or its citizen role.
+        status, user_groups = authorized("GET", f"{base}/users/{user_id}/groups")
+        require(status, 200, user_groups)
+        for group in user_groups:
+            if group["name"] == "citizens-demo":
+                status, detail = authorized("DELETE", f"{base}/users/{user_id}/groups/{group['id']}")
+                require(status, 204, detail)
         status, detail = authorized("PUT", f"{base}/users/{user_id}", body={
             "username": username, "enabled": True, "firstName": "OpenCity",
             "lastName": role, "email": f"{username}@example.invalid", "emailVerified": True,
