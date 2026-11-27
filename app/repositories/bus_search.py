@@ -7,11 +7,14 @@ import os
 from pathlib import Path
 import sqlite3
 import sys
+from threading import Lock
 from typing import Any
 import unicodedata
 import uuid
 
 from app.core import config
+
+_seed_lock = Lock()
 
 def _unaccent(s: str | None) -> str:
     if not s:
@@ -35,7 +38,7 @@ def _db_connection() -> sqlite3.Connection:
     return conn
 
 
-def init_db() -> None:
+def init_db(seed_if_empty: bool = True) -> None:
     with closing(_db_connection()) as conn, conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS bus_routes (
@@ -91,19 +94,21 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_bus_route_stops_route ON bus_route_stops(route_id, direction)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_bus_route_stops_stop ON bus_route_stops(stop_id)")
 
-        row = conn.execute("SELECT count(*) FROM bus_routes").fetchone()
-        is_testing = "pytest" in sys.modules or bool(os.getenv("PYTEST_CURRENT_TEST"))
-        if row and row[0] == 0 and not is_testing:
-            geojson_path = Path(config.BUS_SEARCH_DB_PATH).parent / "export.geojson"
-            if not geojson_path.exists():
-                geojson_path = Path(__file__).resolve().parents[2] / "data" / "export.geojson"
-            if geojson_path.exists():
-                try:
-                    with open(geojson_path, "r", encoding="utf-8") as f:
-                        geo_data = json.load(f)
-                    import_osm_geojson(geo_data, replace_existing=False)
-                except Exception:
-                    pass
+    if not seed_if_empty or "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        return
+
+    seed_path = Path(__file__).resolve().parents[2] / "seed" / "export.geojson"
+    if not seed_path.exists():
+        seed_path = Path(__file__).resolve().parents[2] / "data" / "export.geojson"
+    if not seed_path.exists():
+        return
+
+    with _seed_lock:
+        with closing(_db_connection()) as conn:
+            if conn.execute("SELECT count(*) FROM bus_routes").fetchone()[0]:
+                return
+        with seed_path.open("r", encoding="utf-8") as f:
+            import_osm_geojson(json.load(f), replace_existing=False)
 
 
 def list_routes(
@@ -877,7 +882,7 @@ def _chain_multilinestring_segments(segments: list[list[list[float]]]) -> list[l
 def import_osm_geojson(data: dict, replace_existing: bool = False) -> tuple[int, int]:
     """Import OpenStreetMap GeoJSON feature collection with bidirectional route separation and stop linking."""
     from collections import defaultdict
-    init_db()
+    init_db(seed_if_empty=False)
     features = data.get("features", [])
     now_str = datetime.now(timezone.utc).isoformat()
 
