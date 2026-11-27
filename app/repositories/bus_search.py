@@ -97,10 +97,18 @@ def init_db(seed_if_empty: bool = True) -> None:
     if not seed_if_empty or "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
         return
 
-    seed_path = Path(__file__).resolve().parents[2] / "seed" / "export.geojson"
-    if not seed_path.exists():
-        seed_path = Path(__file__).resolve().parents[2] / "data" / "export.geojson"
-    if not seed_path.exists():
+    data_dir = Path(config.BUS_SEARCH_DB_PATH).parent
+    repo_root = Path(__file__).resolve().parents[2]
+    candidate_paths = [
+        repo_root / "seed" / "bus_osm.geojson",
+        repo_root / "seed" / "export.geojson",
+        data_dir / "bus_osm.geojson",
+        data_dir / "export.geojson",
+        repo_root / "data" / "bus_osm.geojson",
+        repo_root / "data" / "export.geojson",
+    ]
+    seed_path = next((p for p in candidate_paths if p.exists()), None)
+    if not seed_path:
         return
 
     with _seed_lock:
