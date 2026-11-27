@@ -86,8 +86,8 @@ jobs:
             has_begin=$(grep -c '^-----BEGIN ' ~/.ssh/deploy_key || true)
             has_end=$(grep -c '^-----END ' ~/.ssh/deploy_key || true)
             is_pub=$(grep -cE '^(ssh-|ecdsa-)' ~/.ssh/deploy_key || true)
-            err_clean=$(printf '%s' "$err" | tr '\n' ' ')
-            echo "::error::Invalid OpenSSH private key (${err_clean}): lines=${lines}, bytes=${bytes}, max_line=${max_line}, begin=${has_begin}, end=${has_end}, pub=${is_pub}"
+            err_clean=$(printf '%s' "$err" | tr '\r\n' '  ' | xargs)
+            echo "::error::Invalid OpenSSH private key: lines=${lines}, bytes=${bytes}, max_line=${max_line}, begin=${has_begin}, end=${has_end}, pub=${is_pub}, err=${err_clean}"
             exit 1
           fi
           ssh -i ~/.ssh/deploy_key -p "$SERVER_PORT" \
