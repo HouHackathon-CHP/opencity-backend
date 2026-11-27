@@ -41,7 +41,7 @@ jobs:
     name: Deploy to Production Server
     runs-on: ubuntu-latest
     needs: docker-build
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    if: github.repository_owner == 'HouHackathon-CHP' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch')
     steps:
       - name: Deploy opencity-backend over SSH
         env:
@@ -52,8 +52,8 @@ jobs:
           TARGET_REF: ${{ inputs.target_ref || github.ref_name || 'main' }}
         run: |
           if [ -z "$SERVER_SSH_KEY" ]; then
-            echo "Skipping CD: SERVER_SSH_KEY secret is not configured."
-            exit 0
+            echo "::error::SERVER_SSH_KEY secret is empty or not granted access to this repository."
+            exit 1
           fi
           mkdir -p ~/.ssh
           printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/deploy_key
