@@ -59,11 +59,16 @@ jobs:
           python3 - <<'PY'
           import base64, os, pathlib, re, textwrap
           raw = os.environ["SERVER_SSH_KEY"].replace("\x00", "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").strip()
-          if "BEGIN " not in raw and "\n" not in raw and len(raw) > 100:
+          if "BEGIN " not in raw and len(raw) > 100:
+              compact = "".join(raw.split())
               try:
-                  dec = base64.b64decode(raw, validate=True).decode("utf-8", errors="ignore").replace("\r", "").strip()
-                  if "BEGIN " in dec:
-                      raw = dec
+                  dec_bytes = base64.b64decode(compact, validate=True)
+                  if dec_bytes.startswith(b"openssh-key-v1\x00"):
+                      raw = "-----BEGIN OPENSSH PRIVATE KEY-----\n" + "\n".join(textwrap.wrap(compact, 70)) + "\n-----END OPENSSH PRIVATE KEY-----"
+                  else:
+                      dec_text = dec_bytes.decode("utf-8", errors="ignore").replace("\r", "").strip()
+                      if "BEGIN " in dec_text:
+                          raw = dec_text
               except Exception:
                   pass
           block = re.search(r"(-----BEGIN [A-Z0-9 ]+-----.*?-----END [A-Z0-9 ]+-----)", raw, flags=re.S)
