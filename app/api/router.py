@@ -3,7 +3,7 @@
 
 from fastapi import APIRouter
 
-from app.api.routes import admin, administrative_feedback, air_quality, appointments, bulletins, bus_search, business_feedback, communications, community, digital_ward, hotlines, notifications, reports, social_feedback, surveys, system
+from app.api.routes import admin, administrative_feedback, air_quality, appointments, bulletins, bus_search, business_feedback, communications, community, digital_ward, facilities, hotlines, notifications, parking, reports, social_feedback, surveys, system, tourism, ward
 
 
 api_router = APIRouter()
@@ -23,3 +23,7 @@ api_router.include_router(hotlines.router)
 api_router.include_router(reports.router)
 api_router.include_router(air_quality.router)
 api_router.include_router(bus_search.router)
+api_router.include_router(tourism.router)
+api_router.include_router(facilities.router)
+api_router.include_router(parking.router)
+api_router.include_router(ward.router)
