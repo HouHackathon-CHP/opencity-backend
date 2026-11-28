@@ -1,133 +1,107 @@
-# OpenCity Backend — domain API
+<div align="center">
 
-Business API for the [OpenCity frontend](https://github.com/HouHackathon-CHP/opencity-frontend) and [citizen mobile app](https://github.com/HouHackathon-CHP/opencity-mobile), deployed **behind** the [DX-OS Core](https://github.com/HouHackathon-CHP/dxos-core) gateway. Each application component lives in its own repository. The core remains headless and reusable.
+# OpenCity Backend — Layer 2 Domain API
 
-## Responsibilities
+**Tầng API Nghiệp vụ Đô thị Thông minh chạy phía sau DX-OS Core Gateway**
 
-The API follows a layered FastAPI layout: `app/main.py` creates the application;
-`app/api/routes` exposes HTTP endpoints; `app/schemas` validates requests;
-`app/services` holds reusable business rules; `app/repositories` owns local
-persistence helpers; and `app/core` contains configuration, gateway identity and
-DX-OS integration. See
-[`docs/architecture.md`](docs/architecture.md) for the directory contract.
+<p>
+  <a href="#gioi-thieu">Giới thiệu</a> &bull;
+  <a href="#tinh-nang">Phân hệ Nghiệp vụ</a> &bull;
+  <a href="#cau-truc">Cấu trúc &amp; Tech Stack</a> &bull;
+  <a href="#cai-dat">Cài đặt</a> &bull;
+  <a href="#routes">Danh sách API</a> &bull;
+  <a href="#thanh-vien">Đội ngũ</a>
+</p>
 
-- Validate field report data and image size/type.
-- Compose a tenant-scoped data record, optional stored object, and `report-handling` workflow instance.
-- Return one domain response to the frontend instead of exposing the data/workflow APIs as its application contract.
-- Dispatch reports across units with deadlines, acceptance, progress notes, transfer requests and an audit trail. Enforce tenant, owner and assigned-unit access on every report and attachment request.
-- Store report notifications for citizens, assigned units and dispatchers, with per-user read state and idempotent deadline reminders.
-- Publish tenant-scoped news and alerts for citizen apps. Only `bulletins_operator` or `admin` can publish; all authenticated members of that tenant can read.
-- Run tenant-scoped, single-choice surveys. `surveys_operator` or `admin` can publish and close them; each account can answer once.
-- Manage local citizen reception appointments: `appointments_operator` publishes future slots and confirms or rejects requests; citizens request and cancel their own appointments. Confirmations respect per-slot capacity.
-- Receive administrative-procedure feedback in a separate module: citizens submit and follow their own cases; `administrative_feedback_operator` reviews and answers cases in its tenant; citizens may ask for clarification or close an answered case. Every transition is recorded.
-- Receive business petitions with a self-declared company name, tax code and representative. `business_feedback_operator` may review, request information and answer petitions in its tenant; the submitter may provide information, request another review or close the case. The prototype does not verify tax codes against an official registry.
-- Summarize visible reports for the staff SLA dashboard: state counts, unassigned cases, next-24-hour deadlines, overdue cases, unit workload and a priority queue. The API applies the same report visibility rules before aggregating.
-- Offer dispatcher-only, human-reviewed text triage: suggest a unit and attention level, surface similar reports, and record whether the final unit matched the suggestion. It does not auto-dispatch or interpret images.
-- Give `admin` an operational overview with tenant-scoped totals for reports, appointments, feedback, bulletins, surveys and hotlines. Account and role management remains in Keycloak.
-- Maintain a tenant-scoped hotline directory: `hotlines_operator` or `admin` can publish, edit and hide contact entries; citizens see only active entries. Tapping a number in the Android app opens the phone dialer.
+<p>
+  <img src="https://img.shields.io/badge/License-Apache_2.0-0f172a?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/FastAPI-0.158-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Storage-SQLite_%2B_GeoJSON-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite">
+  <img src="https://img.shields.io/badge/Telemetry-WAQI_%2B_OSM-2ea44f?style=flat-square" alt="WAQI OSM">
+</p>
 
-## Local stack
+</div>
 
-Keep `dxos-core`, `opencity-backend`, `opencity-ai`, and `opencity-frontend` as sibling directories. The AI repo uses Git LFS for model weights; run `git lfs pull` in `opencity-ai` before building the combined stack. Install Docker Desktop and Python 3.10+, and start the Docker Linux engine. Create `dxos-core/.env` from its `.env.example` if this is a fresh setup, then replace the example secrets; retain an existing `.env` if you already use the stack. From the `opencity-backend` directory:
+---
 
-```powershell
-docker compose --env-file ..\dxos-core\.env -f ..\dxos-core\compose.yaml -f compose.stack.yaml up --build -d
-python ..\dxos-core\scripts\smoke.py
-python scripts\smoke_app.py
+## Giới thiệu <a id="gioi-thieu"></a>
+
+**OpenCity Backend** là tầng API nghiệp vụ (Layer 2) phục vụ [Cổng Web OpenCity](https://github.com/HouHackathon-CHP/opencity-frontend) và [Ứng dụng Android Công dân](https://github.com/HouHackathon-CHP/opencity-mobile). Service được triển khai hoàn toàn phía sau API Gateway của [DX-OS Core](https://github.com/HouHackathon-CHP/dxos-core), không mở cổng trực tiếp ra ngoài và mọi yêu cầu đều được xác thực qua gateway headers (`X-DXOS-*`, `X-Internal-Secret`).
+
+Hệ thống kết hợp lưu trữ giao dịch lõi (`dxos-core` Data, SeaweedFS S3, Workflow Engine, AI Triage) với cơ sở dữ liệu SQLite cục bộ và các bộ dữ liệu mở OpenStreetMap / WAQI thời gian thực.
+
+---
+
+## Các Phân hệ Nghiệp vụ Thực tế <a id="tinh-nang"></a>
+
+### 1. Phản ánh Hiện trường, Điều phối SLA & Thông báo
+* Tiếp nhận phản ánh kèm ảnh (kiểm tra dung lượng tối đa 10 MB và định dạng JPEG/PNG/WebP) và tọa độ; đồng bộ tạo bản ghi trên `dxos-core` Data, upload ảnh lên SeaweedFS và khởi tạo workflow `report-handling`.
+* **Điều phối theo đơn vị (`unit_id`)**: Hỗ trợ `reports_dispatcher` phân công cho 4 đơn vị (`infrastructure`, `environment`, `transport`, `intake`) kèm hạn xử lý `due_at`; hỗ trợ tiếp nhận, cập nhật tiến độ, yêu cầu chuyển đơn vị, từ chối chuyển và hoàn tất.
+* **SLA Dashboard & Gợi ý Triage**: Tổng hợp số lượng hồ sơ mới, đang xử lý, chưa phân công, sắp đến hạn 24 giờ và quá hạn; gọi dịch vụ AI nội bộ (`opencity-ai`) gợi ý đơn vị và tìm hồ sơ tương tự.
+* **Hộp thư Thông báo (`/notifications`)**: Lưu trạng thái đã đọc theo từng tài khoản và tự động tạo nhắc việc không trùng lặp cho hồ sơ sắp đến hạn / quá hạn.
+
+### 2. Quan trắc Chất lượng Không khí Thời gian thực (`/air-quality`)
+* Tự động quét và đồng bộ các trạm quan trắc thực tế tại Hà Nội từ **WAQI Map Bounds API (`api.waqi.info`)** ngay lần truy cập đầu tiên và tự động làm mới mỗi 15 phút (hoặc đồng bộ tức thì qua `/air-quality/sync`).
+* Trả về dữ liệu thật (VN-AQI, $\text{PM}_{2.5}$, $\text{PM}_{10}$, nhiệt độ, độ ẩm, $CO, NO_2, O_3, SO_2$) không bịa đặt số liệu khi trạm thiếu dữ liệu; hỗ trợ CRUD trạm, đổi trạng thái (`active`, `maintenance`, `hidden`) và phát cảnh báo ô nhiễm diện rộng.
+
+### 3. Bản đồ 126 Xã/Phường, Xe buýt, Bãi đỗ xe & Tiện ích Đô thị
+* **126 Xã/Phường Hà Nội (`/wards`)**: Nạp ranh giới GeoJSON và siêu dữ liệu (diện tích, dân số ước tính, địa chỉ trụ sở, đường dây nóng) từ `data/wards_boundaries.geojson`, hỗ trợ quản trị viên thêm/sửa/xóa.
+* **Xe buýt & Tìm đường đi bộ (`/bus/*`)**: Đóng gói sẵn ảnh chụp dữ liệu OpenStreetMap (`data/bus_osm.geojson` — 184 tuyến và 5,052 điểm dừng), hỗ trợ tìm tuyến trực tiếp / chuyển tuyến (`/bus/find`), tính lộ trình đi bộ (`/bus/walk-route`) và ước tính lượng $\text{CO}_2$ tiết kiệm.
+* **Bãi đỗ xe thông minh (`/parking`)**: Dữ liệu bãi đỗ xe kèm đa giác phạm vi thực tế (`data/parking_footprints.geojson`, `data/parking_osm.geojson`).
+* **Du lịch, Di tích & Cơ sở Công cộng (`/tourism`, `/facilities`)**: Địa điểm du lịch/di tích (`data/tourism_osm.geojson`), cơ sở y tế, nhà thuốc và trường học (`data/facilities_osm.geojson`).
+
+### 4. Hành chính Công, Cộng đồng & Quản trị
+* **Đường dây nóng (`/hotlines`)**, **Tin tức & Cảnh báo (`/bulletins`)**, **Khảo sát (`/surveys`)**, **Đặt lịch tiếp công dân (`/appointments`)**.
+* **Phản ánh TTHC (`/administrative-feedback`)** & **Kiến nghị Doanh nghiệp (`/business-feedback`)**: Quy trình trao đổi hai chiều có lưu lịch sử chuyển trạng thái đầy đủ.
+* **Truyền thông (`/communications`)**, **Nhóm cộng đồng (`/community`)**, **Phản ánh xã hội (`/social-feedback`)**, **Xã/Phường số (`/digital-ward`)** và **Tổng quan Admin (`/admin/overview`)**.
+
+---
+
+## Cấu trúc Dự án & Công nghệ <a id="cau-truc"></a>
+
+```text
+opencity-backend/
+├── app/
+│   ├── api/routes/      # 20 router HTTP (reports, air_quality, ward, bus_search, parking, tourism, facilities...)
+│   ├── schemas/         # Pydantic v2 models kiểm tra đầu vào / đầu ra
+│   ├── services/        # Business logic, SLA rules, WAQI sync, triage integration
+│   ├── repositories/    # Persistence helpers (SQLite + GeoJSON auto-seed)
+│   └── core/            # Cấu hình môi trường, xác thực header từ Gateway, client gọi dxos-core
+├── data/                # Bộ dữ liệu mở GeoJSON (bus_osm, wards_boundaries, parking_osm, facilities_osm, tourism_osm)
+├── scripts/             # provision_roles.py, smoke_app.py, smoke_new_features.py, seed_dashboard_demo.py
+├── tests/               # Unit & API tests bằng Pytest
+├── compose.stack.yaml   # Cấu hình gắn opencity-backend vào DX-OS Core Compose
+└── Dockerfile
 ```
 
-The core smoke script provisions the base demo citizen and checks Keycloak, gateway, data and workflow. The application smoke script provisions OpenCity operator accounts, checks feature APIs and seeds small `[DEMO]` fixtures. For a varied report map and SLA dashboard, optionally run `python scripts\seed_dashboard_demo.py` once. All three scripts can be rerun.
-
-The Compose command adds an internal `opencity-backend` service and configures the core gateway's optional `opencity` upstream. This backend has no published port. Browser requests use `http://localhost:8000/api/opencity/...`. The gateway injects identity headers; direct unauthenticated calls to this backend fail. Private routes require a valid Keycloak access token. Start the [web frontend](https://github.com/HouHackathon-CHP/opencity-frontend) or [Android app](https://github.com/HouHackathon-CHP/opencity-mobile) separately using its README.
-
-The local Compose stack also permits anonymous GET requests for published bulletins, active hotlines, visible air-quality stations, and bus lookup through the gateway. These requests use the configured public tenant `demo`; logged-in users retain their own tenant scope. POST/PUT/PATCH/DELETE, private routes, hidden air-quality stations, and the generic core APIs still require a token. Change the public tenant and review the route allowlist in `compose.stack.yaml` before deploying another tenant.
-
-To load live air-quality readings from WAQI, set `WAQI_API_TOKEN` in the ignored `dxos-core/.env` and recreate `opencity-backend` with the combined Compose files. The token is passed to the backend by `compose.stack.yaml`; do not commit its value. The public tenant automatically refreshes WAQI map points within the Hanoi bounds on first access and every 15 minutes. Points without a current AQI remain visible with an empty reading; missing measurements are never invented. Operators can run `/air-quality/sync` to force a refresh. A token previously saved through the operator UI takes precedence over the environment value.
-
-The backend image bundles `data/export.geojson`, an OpenStreetMap bus snapshot dated 2026-11-11 and licensed under ODbL. On first access with an empty bus database, it imports the snapshot into the persistent Compose volume (184 routes and 5,052 stops in this export). This provides route and stop lookup without depending on the Overpass service at startup. It is a static snapshot, not live vehicle positions or a current timetable; refresh it with a newer OSM export or the operator sync/import endpoints.
-
-Run `python scripts/provision_roles.py` after the core smoke script to create or update the local demo staff and OpenCity portal admin accounts. Every account has a `DEMO_<ROLE>_USERNAME` / `DEMO_<ROLE>_PASSWORD` pair in `dxos-core/.env`; the full list is in the core's `.env.example`. Existing local `.env` files without the new staff keys still fall back to `DEMO_OPERATOR_PASSWORD`, but add separate passwords before sharing the stack. `DEMO_ADMIN_*` is the OpenCity portal admin, separate from the Keycloak master admin. This script is idempotent and also runs at the start of `scripts/smoke_app.py`. For real staff, assign the `reports_dispatcher` role to intake coordinators, or the `reports_operator` role and an admin-managed `unit_id` attribute to unit handlers. Supported units are `infrastructure`, `environment`, `transport`, and `intake`. Other feature roles need no unit attribute. `admin` grants all management features and all report units. The core's legacy `operator` role grants no OpenCity management permission.
-
-`GET /me/capabilities` returns management features, report unit and dispatcher capability. Citizens see their own reports; dispatchers see all reports in their tenant; unit handlers see only reports explicitly assigned to their unit. The category suggests an initial unit (`Hạ tầng`/`Chiếu sáng` → `infrastructure`; `Môi trường`/`Cây xanh` → `environment`; `Giao thông` → `transport`; `Khác` → `intake`), but does not grant that unit access. Existing reports without a saved assignment appear in the dispatcher inbox until dispatched. The backend checks unit scope again on details, attachments, workflow retry and actions. The web hides unauthorized routes, while API checks remain authoritative.
-
-The coordinator dispatches with `unit_id`, a timezone-aware future `due_at`, and a note. This advances the core workflow to `assigned` and saves the routing decision in `report-routing.sqlite3` on the local persistent volume. The unit accepts, posts progress notes and resolves, or requests transfer to another unit. The coordinator reassigns or rejects the request. Reassignment revokes the old unit's access. Notes and routing events are included in the citizen-visible history, so staff must write public-facing text. The web report inbox can filter overdue cases. SQLite is for the local single-instance prototype; a multi-replica deployment needs a shared transactional database.
-
-`GET /notifications` returns the 100 latest in-app notices visible to the caller. New reports notify dispatchers; dispatch and workflow updates notify the citizen and relevant staff. Unit notices stop being visible when a report moves away from that unit. `POST /notifications/{id}/read` marks a notice read for the current account only. Listing also creates deduplicated reminders for cases due within 24 hours or already overdue. This is an in-app inbox, not an OS push service or a background scheduler; reminders are materialized when a signed-in client polls the API.
-
-The newer local feature roles are `hotlines_operator`, `communications_operator`,
-`community_groups_operator`, `social_feedback_operator`, and `digital_ward_operator`.
-Run `python scripts/provision_roles.py` after updating the backend to create their demo accounts.
-Each feature has a separate tenant-scoped API and web management page. The Android app is citizen-facing.
-Community posts are visible to joined members and community operators. Consultation opinions
-are private to their author and the consultation operator. Digital ward profiles must be
-entered by an operator; no official ward directory or contact details are bundled.
-After the local stack starts and roles are provisioned, run
-`.venv\Scripts\python scripts\smoke_new_features.py` to verify the five new APIs
-through Keycloak and the DX-OS gateway. It reuses clearly marked demo records.
-
-### Routes
-
-| Method | Route | Purpose |
+| Thành phần | Công nghệ | Mục đích |
 | --- | --- | --- |
-| `GET` | `/me/capabilities` | List the caller's management features |
-| `GET` | `/admin/overview` | Admin-only tenant operations summary |
-| `GET`, `POST` | `/hotlines` | List visible contacts or add one as hotline operator |
-| `PUT` | `/hotlines/{id}` | Update or hide a contact as hotline operator |
-| `GET` | `/notifications` | List visible in-app notices and materialize deadline reminders |
-| `POST` | `/notifications/{id}/read` | Mark a visible notice read for this account |
-| `GET` | `/reports` | List reports visible to the caller |
-| `GET` | `/reports/dashboard` | Staff-only scoped SLA summary and priority queue |
-| `GET` | `/reports/triage-metrics` | Dispatcher-only suggestion and review counts |
-| `POST` | `/reports` | Create a report (multipart form, optional photo) |
-| `GET` | `/reports/{id}` | Report and workflow history |
-| `GET`, `POST` | `/reports/{id}/triage-suggestion` | Read or generate a dispatcher-only suggestion |
-| `POST` | `/reports/{id}/dispatch` | Coordinator assigns/reassigns unit and deadline |
-| `POST` | `/reports/{id}/accept` | Assigned unit accepts work |
-| `POST` | `/reports/{id}/progress` | Accepted unit posts a public progress note |
-| `POST` | `/reports/{id}/transfer-request` | Assigned unit requests another unit |
-| `POST` | `/reports/{id}/transfer-request/reject` | Coordinator rejects transfer with a reason |
-| `POST` | `/reports/{id}/actions/resolve` | Accepted unit completes the report |
-| `POST` | `/reports/{id}/retry-workflow` | Recover a saved record without a workflow |
-| `GET` | `/reports/{id}/attachments/{object_id}` | Download a report's permitted image |
-| `GET` | `/bulletins`, `/bulletins/{id}` | Read tenant-scoped news and alerts |
-| `POST` | `/bulletins` | Publish a news item or alert (`bulletins_operator`) |
-| `GET` | `/surveys`, `/surveys/{id}` | Read tenant surveys and permitted results |
-| `POST` | `/surveys` | Publish a survey with 2–8 options (`surveys_operator`) |
-| `POST` | `/surveys/{id}/answers` | Answer once with an option ID |
-| `POST` | `/surveys/{id}/close` | Close a survey (`surveys_operator`) |
-| `GET`, `POST` | `/appointments/slots` | Browse or publish future citizen reception slots |
-| `GET`, `POST` | `/appointments` | List visible requests or submit one |
-| `GET`, `POST` | `/administrative-feedback` | List visible procedure feedback or submit one |
-| `GET` | `/administrative-feedback/{id}` | Read an owned or operator-visible case with history |
-| `POST` | `/administrative-feedback/{id}/review` | Operator starts review |
-| `POST` | `/administrative-feedback/{id}/answer` | Operator posts a public answer |
-| `POST` | `/administrative-feedback/{id}/clarification` | Citizen asks for clarification |
-| `POST` | `/administrative-feedback/{id}/close` | Citizen closes an answered case |
-| `GET`, `POST` | `/business-feedback` | List visible petitions or submit one |
-| `GET` | `/business-feedback/{id}` | Read an owned or operator-visible petition |
-| `POST` | `/business-feedback/{id}/review` | Operator starts review |
-| `POST` | `/business-feedback/{id}/request-info` | Operator requests more information |
-| `POST` | `/business-feedback/{id}/provide-info` | Submitter provides information |
-| `POST` | `/business-feedback/{id}/resolve` | Operator answers the petition |
-| `POST` | `/business-feedback/{id}/reopen` | Submitter requests another review |
-| `POST` | `/business-feedback/{id}/close` | Submitter closes a resolved petition |
-| `POST` | `/appointments/{id}/decision` | Confirm or reject (`appointments_operator`) |
-| `POST` | `/appointments/{id}/cancel` | Cancel one's own pending or confirmed request |
+| **API Framework** | FastAPI `0.158` + Uvicorn + Pydantic | Thiết kế API phân lớp rõ ràng, validation chặt chẽ. |
+| **HTTP Client** | `httpx` + `urllib` | Giao tiếp nội bộ với `dxos-core`, `opencity-ai`, WAQI API và OSRM. |
+| **Local Persistence** | SQLite 3 + GeoJSON | Lưu trữ dữ liệu nghiệp vụ đô thị phân tách theo `tenant`. |
+| **Testing & Audit** | Pytest + `check_direct_licenses.py` | Kiểm thử API, RBAC và kiểm toán giấy phép thư viện Python. |
 
-The gateway prefixes these with `/api/opencity`.
+---
 
-The triage service calls the separate internal [OpenCity AI](https://github.com/HouHackathon-CHP/opencity-ai) service with report text, location and time, curated examples, prior assignments and similar-case candidates from the same tenant. Results and a final unit review are saved in the report-routing SQLite database. The dispatcher can change the suggested unit and must set a deadline. When text provides no matching signal, the suggestion falls back to general intake and normal attention for manual review. The attention level is advisory and does not alter SLA rules. Text scores are relative rankings, not calibrated confidence; image contents are not analyzed. The backend sends only reports visible to the dispatcher; the AI service is internal to Compose and requires the shared service secret.
+## Hướng dẫn Cài đặt & Chạy Local <a id="cai-dat"></a>
 
-`seed_dashboard_demo.py` inserts five `[DEMO SLA]` reports at different Hanoi coordinates, dispatches four of them with different future deadlines, and leaves one awaiting dispatch. It is idempotent. The short deadlines become overdue naturally if the stack remains running; the script never rewrites existing deadlines.
+Đặt `dxos-core`, `opencity-backend`, `opencity-ai` và `opencity-frontend` ngang hàng nhau. Nếu dùng `opencity-ai`, chạy `git lfs pull` trong `opencity-ai` trước khi build.
 
-Bulletins use a separate persistent SQLite volume in the local Compose stack. They are entered by an operator; no official news feed is bundled. `POST /bulletins` accepts `category` (`news` or `alert`), `title`, `summary`, `body`, and optional `area`, `latitude`, `longitude`. The smoke script inserts one clearly marked `[DEMO]` alert if it is absent, so the mobile map and feed can be tested.
+```powershell
+# 1. Tạo file .env cho dxos-core (điền thêm WAQI_API_TOKEN nếu muốn đồng bộ AQI thực tế)
+Copy-Item ..\dxos-core\.env.example ..\dxos-core\.env
 
-Surveys use a separate SQLite file in that persistent volume. The API enforces one answer per user and validates that the chosen option belongs to the survey. Citizens see vote totals only after they answer or the survey closes; operators see totals while it is open. `smoke_app.py` seeds one `[DEMO]` survey without submitting an answer for the citizen account.
+# 2. Khởi chạy toàn bộ Docker Compose stack
+docker compose --env-file ..\dxos-core\.env -f ..\dxos-core\compose.yaml -f compose.stack.yaml up --build -d
 
-Citizen reception appointments use `appointments.sqlite3` in the same persistent volume. `smoke_app.py` opens a clearly marked `[DEMO]` slot for local testing. These appointments exist only in OpenCity; they are not reservations in an official government service. The separate "Đặt lịch thực hiện DVC" catalog connector stays unavailable until a provider integration exists.
+# 3. Khởi tạo tài khoản mẫu, kiểm thử lõi và dữ liệu OpenCity
+python ..\dxos-core\scripts\smoke.py
+python scripts\smoke_app.py
+python scripts\seed_dashboard_demo.py   # (Tùy chọn) Nạp 5 hồ sơ SLA mẫu trên bản đồ Hà Nội
+```
 
-## Development
-
+* **Kiểm thử Unit & API cục bộ**:
 ```powershell
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt -r requirements-dev.txt
@@ -135,8 +109,51 @@ python -m venv .venv
 .venv\Scripts\python -m pytest -q
 ```
 
-This is a prototype API. The core still needs server-side anti-malware scanning, rate limiting, migration and production secret management. A record is intentionally retained if photo upload or workflow startup fails; the response contains warnings and the workflow can be retried. The backend does not connect to any official government service.
+---
 
-## License
+## Danh sách Route Chính <a id="routes"></a>
 
-Apache-2.0. The four direct Python packages are pinned and gated against reviewed OSI-approved licenses. See [`docs/license-audit.md`](docs/license-audit.md) for the limit of that check.
+Mọi route dưới đây được Gateway gắn tiền tố `/api/opencity`. Khi hệ thống đang chạy, xem tài liệu tương tác **Swagger UI** tại `http://localhost:8000/api/opencity/docs` (hoặc **ReDoc** tại `http://localhost:8000/api/opencity/redoc`).
+
+| Nhóm | Route tiêu biểu | Mô tả |
+| --- | --- | --- |
+| **Hệ thống & Quản trị** | `GET /me/capabilities`, `GET /admin/overview` | Quyền hạn người gọi và tổng quan vận hành toàn tenant |
+| **Phản ánh & SLA** | `GET/POST /reports`, `/reports/dashboard`, `/reports/{id}/dispatch`, `/accept`, `/progress`, `/actions/resolve` | Tiếp nhận, gợi ý triage, phân công đơn vị và xử lý hồ sơ |
+| **Thông báo** | `GET /notifications`, `POST /notifications/{id}/read` | Hộp thư thông báo và nhắc hạn SLA |
+| **Không khí (WAQI)** | `GET /air-quality/summary`, `/stations`, `POST /air-quality/sync`, `/broadcast-alert` | Theo dõi VN-AQI, đồng bộ WAQI và quản trị trạm |
+| **126 Xã/Phường** | `GET/POST/PUT/DELETE /wards`, `/wards/{id}` | Bản đồ ranh giới GeoJSON và thông tin đơn vị hành chính |
+| **Xe buýt & Đỗ xe** | `GET /bus/routes`, `/bus/stops`, `/bus/find`, `/bus/walk-route`, `/parking`, `/parking/footprints` | Tra cứu tuyến buýt, tìm đường và bãi đỗ xe thông minh |
+| **Du lịch & Tiện ích** | `GET/POST/PUT/DELETE /tourism/destinations`, `/facilities` | Điểm du lịch, di tích, y tế, nhà thuốc và trường học |
+| **Hành chính & Cộng đồng** | `/bulletins`, `/surveys`, `/appointments`, `/hotlines`, `/administrative-feedback`, `/business-feedback`, `/communications`, `/community/groups`, `/social-feedback`, `/digital-ward` | Tin tức, khảo sát, đặt lịch, đường dây nóng và tương tác công dân/doanh nghiệp |
+
+---
+
+## Thành viên Dự án & Đóng góp <a id="thanh-vien"></a>
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/hieutnago">
+        <img src="https://github.com/hieutnago.png" width="96px" alt="Trương Ngọc Hiểu"/><br>
+        <sub><b>Trương Ngọc Hiểu</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/HouHackathon-CHP">
+        <img src="https://avatars.githubusercontent.com/u/168514215?v=4" width="96px" alt="Trần Trọng Chiến"/><br>
+        <sub><b>Trần Trọng Chiến</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/HouHackathon-CHP">
+        <img src="https://avatars.githubusercontent.com/u/100331812?v=4" width="96px" alt="Nguyễn Hà Phương"/><br>
+        <sub><b>Nguyễn Hà Phương</b></sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
+1. Fork repository và tạo nhánh từ `dev`: `git checkout -b feature/ten-tinh-nang`.
+2. Đảm bảo thêm `# SPDX-License-Identifier: Apache-2.0` vào tệp mã nguồn mới và chạy `python -m pytest -q` pass trước khi mở Pull Request.
+
+Phát hành theo giấy phép **Apache License 2.0** — xem [LICENSE](LICENSE), [docs/license-audit.md](docs/license-audit.md) và [CHANGELOG.md](CHANGELOG.md).

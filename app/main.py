@@ -7,7 +7,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 
 
-app = FastAPI(title="OpenCity Domain API", docs_url=None, redoc_url=None)
+app = FastAPI(
+    title="OpenCity Domain API",
+    description="Tầng API nghiệp vụ đô thị thông minh OpenCity chạy phía sau DX-OS Gateway.",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    root_path="/api/opencity",
+)
 
 app.add_middleware(
     CORSMiddleware,
